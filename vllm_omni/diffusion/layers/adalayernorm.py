@@ -90,7 +90,10 @@ class AdaLayerNorm(CustomOp):
             output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
         else:
             import torch_npu
-            output = torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result) + shift_result
+            output = (
+                torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result)
+                + shift_result
+            )
 
         return output, gate_result
 
