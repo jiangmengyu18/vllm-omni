@@ -1,3 +1,5 @@
+from importlib.util import find_spec
+
 import torch
 import torch.nn as nn
 from vllm.logger import init_logger
@@ -83,11 +85,12 @@ class AdaLayerNorm(CustomOp):
     ) -> torch.Tensor:
         shift_result, scale_result, gate_result = self.preprocess(mod_params, index)
 
-        import torch_npu
-
-        output = torch_npu.npu_layer_norm_eval(
-            x, normalized_shape=[self.hidden_size], weight=(1 + scale_result), bias=shift_result, eps=self.eps
-        )
+        if find_spec("mindiesd"):
+            from mindiesd import layernorm_scale_shift
+            output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
+        else:
+            import torch_npu
+            output = torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result) + shift_result
 
         return output, gate_result
 
