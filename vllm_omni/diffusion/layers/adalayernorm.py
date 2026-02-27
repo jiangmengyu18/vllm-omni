@@ -8,6 +8,8 @@ from vllm_omni.diffusion.layers.custom_op import CustomOp
 
 logger = init_logger(__name__)
 
+_HAS_MINDIESD = find_spec("mindiesd") is not None
+
 
 class AdaLayerNorm(CustomOp):
     """
@@ -85,9 +87,17 @@ class AdaLayerNorm(CustomOp):
     ) -> torch.Tensor:
         shift_result, scale_result, gate_result = self.preprocess(mod_params, index)
 
-        if find_spec("mindiesd"):
-            from mindiesd import layernorm_scale_shift
-            output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
+        if _HAS_MINDIESD:
+            try:
+                from mindiesd import layernorm_scale_shift
+                output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
+            except Exception as e:
+                logger.warning(f"mindiesd import failed, falling back to torch_npu: {e}")
+                import torch_npu
+                output = (
+                    torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result)
+                    + shift_result
+                )
         else:
             import torch_npu
             output = (
