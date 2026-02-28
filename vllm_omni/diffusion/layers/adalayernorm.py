@@ -96,7 +96,6 @@ class AdaLayerNorm(CustomOp):
                 return output, gate_result
             except ImportError as e:
                 logger.warning_once(f"mindiesd import failed, falling back to torch_npu: {e}")
-                logger.warning_once(f"mindiesd import failed, falling back to torch_npu: {e}")
 
         import torch_npu
 
