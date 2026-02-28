@@ -92,22 +92,17 @@ class AdaLayerNorm(CustomOp):
                 from mindiesd import layernorm_scale_shift
 
                 output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
+
+                return output, gate_result
             except Exception as e:
-                logger.warning(f"mindiesd import failed, falling back to torch_npu: {e}")
-                import torch_npu
+                logger.warning_once(f"mindiesd import failed, falling back to torch_npu: {e}")
 
-                output = (
-                    torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps)
-                    * (1 + scale_result)
-                    + shift_result
-                )
-        else:
-            import torch_npu
+        import torch_npu
 
-            output = (
-                torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result)
-                + shift_result
-            )
+        output = (
+            torch_npu.npu_layer_norm_eval(x, normalized_shape=[self.hidden_size], eps=self.eps) * (1 + scale_result)
+            + shift_result
+        )
 
         return output, gate_result
 
