@@ -94,7 +94,8 @@ class AdaLayerNorm(CustomOp):
                 output = layernorm_scale_shift(self.layernorm, x, scale_result, shift_result, fused=True)
 
                 return output, gate_result
-            except Exception as e:
+            except ImportError as e:
+                logger.warning_once(f"mindiesd import failed, falling back to torch_npu: {e}")
                 logger.warning_once(f"mindiesd import failed, falling back to torch_npu: {e}")
 
         import torch_npu
