@@ -65,6 +65,12 @@ class AttentionMetadata:
     joint_strategy: str = "front"
     # the strategy to joint the query, key, and value, can be "front" or "rear"
 
+    txt_len: int = 0
+    # the length of the text sequence
+    latent_shape_q: tuple[int, int, int] | None = None
+    # the image sequence shape of the query tensor in the latent space, (t, h, w)
+    latent_shape_k: tuple[int, int, int] | None = None
+    # the image sequence shape of the key tensor in the latent space, (t, h, w)
 
 T = TypeVar("T", bound=AttentionMetadata)
 
