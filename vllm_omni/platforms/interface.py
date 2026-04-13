@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 import torch
+import torch.nn as nn
 from vllm.platforms import Platform
 
 
@@ -61,6 +62,13 @@ class OmniPlatform(Platform):
 
     @classmethod
     def prepare_diffusion_op_runtime(cls, op_name: str, **kwargs: Any) -> None:
+        return None
+
+    @classmethod
+    def get_diffusion_packed_modules_mapping(
+        cls,
+        model_class: type[nn.Module],
+    ) -> dict[str, list[str]] | None:
         return None
 
     @classmethod
