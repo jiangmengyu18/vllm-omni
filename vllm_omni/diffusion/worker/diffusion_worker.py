@@ -14,6 +14,7 @@ import os
 from collections.abc import Iterable
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any
+from types import SimpleNamespace
 
 import torch
 import zmq
@@ -24,6 +25,7 @@ from vllm.profiler.wrapper import CudaProfilerWrapper, WorkerProfiler
 from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.utils.mem_utils import GiB_bytes
 from vllm.v1.worker.workspace import init_workspace_manager
+from vllm.transformers_utils.config import get_config, get_hf_text_config
 
 from vllm_omni.diffusion.data import (
     DiffusionOutput,
@@ -120,6 +122,16 @@ class DiffusionWorker:
         vllm_config.parallel_config.data_parallel_size = self.od_config.parallel_config.data_parallel_size
         vllm_config.parallel_config.enable_expert_parallel = self.od_config.parallel_config.enable_expert_parallel
         vllm_config.profiler_config = self.od_config.profiler_config
+        hf_config = get_config(self.od_config.model, trust_remote_code=self.od_config.trust_remote_code)
+        hf_text_config = get_hf_text_config(hf_config)
+        vllm_config.model_config = SimpleNamespace(
+            hf_config=hf_config,
+            hf_text_config=hf_text_config,
+            enforce_eager=self.od_config.enforce_eager,
+            dtype=self.od_config.dtype,
+            enable_return_routed_experts=False
+        )
+        vllm_config.quant_config = self.od_config.quantization_config
         self.vllm_config = vllm_config
 
         # Initialize distributed environment
