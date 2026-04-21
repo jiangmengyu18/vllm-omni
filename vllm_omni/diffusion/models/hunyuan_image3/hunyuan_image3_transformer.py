@@ -2015,7 +2015,7 @@ class HunyuanImage3Model(nn.Module):
                 num_attention_heads + num_kv_heads * 2,
                 [("q", num_attention_heads), ("k", num_kv_heads), ("v", num_kv_heads)],
                 self._split_qkv_weight,
-            )
+            ),
         ]
 
         params_dict = dict(self.named_parameters())

@@ -1429,6 +1429,13 @@ class AsyncOmniEngine:
                         or cfg.engine_args.quantization_config is None
                     ):
                         cfg.engine_args.quantization_config = quantization_config
+                quantization = kwargs.get("quantization")
+                if quantization is not None:
+                    if (
+                        not hasattr(cfg.engine_args, "quantization")
+                        or cfg.engine_args.quantization is None
+                    ):
+                        cfg.engine_args.quantization = quantization
             except Exception as e:
                 logger.warning("Failed to inject LoRA config for stage: %s", e)
 

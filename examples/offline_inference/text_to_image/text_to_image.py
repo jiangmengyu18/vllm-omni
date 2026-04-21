@@ -267,6 +267,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=("Custom system prompt. Used when --use-system-prompt is custom. "),
     )
+    current_omni_platform.pre_register_and_update(parser)
     return parser.parse_args()
 
 
