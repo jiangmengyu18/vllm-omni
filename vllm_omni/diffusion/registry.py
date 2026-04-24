@@ -239,7 +239,9 @@ def _prepare_diffusion_quant_config(
         return
     if hasattr(quant_config, "maybe_update_config"):
         quant_config.maybe_update_config(od_config.model)
-    model_class.packed_modules_mapping = current_omni_platform.get_diffusion_packed_modules_mapping(model_class)
+    diffusion_packed_modules_mapping = current_omni_platform.get_diffusion_packed_modules_mapping(model_class)
+    if diffusion_packed_modules_mapping is not None:
+        model_class.packed_modules_mapping = diffusion_packed_modules_mapping
     configure_quant_config(quant_config, model_class)
 
 
