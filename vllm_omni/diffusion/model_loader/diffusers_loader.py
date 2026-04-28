@@ -15,7 +15,6 @@ from torch import nn
 from vllm.config import ModelConfig
 from vllm.config.load import LoadConfig
 from vllm.logger import init_logger
-from vllm.model_executor.layers.quantization.base_config import QuantizeMethodBase
 from vllm.model_executor.model_loader.weight_utils import (
     download_gguf,
     download_safetensors_index_file_from_hf,
@@ -310,12 +309,13 @@ class DiffusersPipelineLoader:
     def _process_weights_after_loading(self, model: nn.Module, target_device: torch.device) -> None:
         """Process weights after loading for quantization methods.
 
-        This handles vLLM's quantization methods that need to process weights
-        after loading (e.g., FP8 online quantization from BF16/FP16 weights).
+        This handles quantization methods that need to process weights after
+        loading, including non-vLLM method objects with the same hook.
         """
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
-            if isinstance(quant_method, QuantizeMethodBase):
+            process_fn = getattr(quant_method, "process_weights_after_loading", None)
+            if callable(process_fn):
                 # Move module to target device for processing if needed
                 module_device = next(module.parameters(), None)
                 if module_device is not None:
@@ -325,7 +325,7 @@ class DiffusersPipelineLoader:
                 if needs_device_move:
                     module.to(target_device)
 
-                quant_method.process_weights_after_loading(module)
+                process_fn(module)
 
                 if needs_device_move:
                     module.to(module_device)

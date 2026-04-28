@@ -48,6 +48,13 @@ class HunyuanFusedMoE:
         impl = resolve_obj_by_qualname(
             current_omni_platform.get_diffusion_model_impl_qualname(op_name),
         )
+        get_impl_kwargs = getattr(
+            current_omni_platform,
+            "get_diffusion_model_impl_kwargs",
+            None,
+        )
+        if callable(get_impl_kwargs):
+            kwargs = get_impl_kwargs(op_name, kwargs)
         return impl(prefix=prefix, **kwargs)
 
     @classmethod

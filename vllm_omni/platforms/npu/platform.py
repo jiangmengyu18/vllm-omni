@@ -2,10 +2,16 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from contextlib import nullcontext
+from importlib.util import find_spec
 from typing import Any
 
 import torch
 import torch.nn as nn
+from vllm.distributed.parallel_state import (
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+    get_tp_group,
+)
 from vllm.logger import init_logger
 from vllm_ascend.platform import NPUPlatform
 
@@ -13,6 +19,14 @@ from vllm_omni.diffusion.attention.backends.registry import DiffusionAttentionBa
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 
 logger = init_logger(__name__)
+
+
+def _has_mindiesd_fused_moe() -> bool:
+    try:
+        return find_spec("mindiesd.layers.fused_moe") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
 
 _DIFFUSION_PACKED_MODULES_MAPPING = {
     "HunyuanImage3Pipeline": {
@@ -46,6 +60,8 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     @classmethod
     def get_diffusion_model_impl_qualname(cls, op_name: str) -> str:
         if op_name == "hunyuan_fused_moe":
+            if _has_mindiesd_fused_moe():
+                return "mindiesd.layers.fused_moe.FusedMoE"
             return "vllm_omni.platforms.npu.models.hunyuan_fused_moe.AscendHunyuanFusedMoE"
         return super().get_diffusion_model_impl_qualname(op_name)
 
@@ -53,12 +69,31 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     def prepare_diffusion_op_runtime(cls, op_name: str, **kwargs: Any) -> None:
         if op_name != "hunyuan_fused_moe":
             return
+        if _has_mindiesd_fused_moe():
+            return
 
         from vllm_omni.platforms.npu.models.hunyuan_fused_moe import (
             prepare_hunyuan_fused_moe_runtime,
         )
 
         prepare_hunyuan_fused_moe_runtime()
+
+    @classmethod
+    def get_diffusion_model_impl_kwargs(
+        cls,
+        op_name: str,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        if op_name == "hunyuan_fused_moe" and _has_mindiesd_fused_moe():
+            tp_size = get_tensor_model_parallel_world_size()
+            kwargs.setdefault("reduce_results", False)
+            kwargs.update(
+                tp_size=tp_size,
+                tp_rank=get_tensor_model_parallel_rank() if tp_size > 1 else 0,
+                tp_group=get_tp_group().device_group,
+                moe_comm_method="local",
+            )
+        return kwargs
 
     @classmethod
     def get_diffusion_packed_modules_mapping(
