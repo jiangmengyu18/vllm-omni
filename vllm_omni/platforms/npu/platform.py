@@ -33,8 +33,12 @@ def _try_get_ep_group() -> Any | None:
         return None
 
 
-def _get_mindiesd_dispatcher_type() -> str:
-    if get_ascend_device_type() in {AscendDeviceType.A3, AscendDeviceType.A5}:
+def _group_is_enabled(group: Any | None) -> bool:
+    return group is not None and getattr(group, "world_size", 1) > 1
+
+
+def _get_mindiesd_dispatcher_type(ep_group: Any | None) -> str:
+    if _group_is_enabled(ep_group) and get_ascend_device_type() in {AscendDeviceType.A3, AscendDeviceType.A5}:
         return "dynamic"
     return "static"
 
@@ -106,12 +110,12 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         if op_name == "hunyuan_fused_moe" and _has_mindiesd_fused_moe():
             tp_group = get_tp_group()
             ep_group = _try_get_ep_group()
-            if getattr(tp_group, "world_size", 1) > 1:
+            if _group_is_enabled(tp_group):
                 kwargs["tp_group"] = tp_group.device_group
-            if ep_group is not None and getattr(ep_group, "world_size", 1) > 1:
+            if _group_is_enabled(ep_group):
                 kwargs["ep_group"] = ep_group.device_group
             kwargs.setdefault("tokens_full", True)
-            kwargs.setdefault("dispatcher_type", _get_mindiesd_dispatcher_type())
+            kwargs.setdefault("dispatcher_type", _get_mindiesd_dispatcher_type(ep_group))
         return kwargs
 
     @classmethod

@@ -132,7 +132,28 @@ def test_ep_keeps_routed_reduce_results_for_mindiesd(mocker):
     assert all_reduce.call_args.args[0] is output
 
 
-def test_static_ep_reduces_combined_output_on_ep(mocker):
+def test_static_ep_reduces_routed_output_inside_mindiesd(mocker):
+    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
+
+    routed_out = torch.ones(3, 4)
+    shared_out = torch.full((3, 4), 2.0)
+    fused_moe = mocker.MagicMock(return_value=routed_out)
+    shared_experts = mocker.MagicMock(return_value=shared_out)
+    _install_fake_mindiesd(mocker, fused_moe)
+    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
+    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
+    ep_group = object()
+
+    layer = _make_layer(moe_module, shared_experts=shared_experts)
+    layer.ep_group = ep_group
+
+    output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
+
+    assert fused_moe.call_args.kwargs["reduce_results"] is True
+    assert torch.equal(output, routed_out + shared_out)
+
+
+def test_static_ep_tp_reduces_routed_on_ep_and_combined_output_on_tp(mocker):
     import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
 
     routed_out = torch.ones(3, 4)
@@ -144,17 +165,18 @@ def test_static_ep_reduces_combined_output_on_ep(mocker):
     mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
     all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
     ep_group = object()
+    tp_group = object()
 
     layer = _make_layer(moe_module, shared_experts=shared_experts)
     layer.ep_group = ep_group
+    layer.tp_group = tp_group
 
     output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
 
-    assert fused_moe.call_args.kwargs["reduce_results"] is False
+    assert fused_moe.call_args.kwargs["reduce_results"] is True
     all_reduce.assert_called_once()
     assert all_reduce.call_args.args[0] is output
-    assert all_reduce.call_args.kwargs["group"] is ep_group
-    assert torch.equal(output, routed_out + shared_out)
+    assert all_reduce.call_args.kwargs["group"] is tp_group
 
 
 def test_ep_tp_without_shared_reduces_routed_output_on_tp(mocker):
