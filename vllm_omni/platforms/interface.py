@@ -77,6 +77,14 @@ class OmniPlatform(Platform):
         return None
 
     @classmethod
+    def get_diffusion_model_impl_kwargs(
+        cls,
+        op_name: str,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        return kwargs
+
+    @classmethod
     def get_diffusion_packed_modules_mapping(
         cls,
         model_class: type[nn.Module],

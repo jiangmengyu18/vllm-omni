@@ -61,6 +61,7 @@ class TestHunyuanFusedMoEPlatformDispatch:
         mock_platform.get_diffusion_model_impl_qualname.return_value = (
             "vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe.HunyuanFusedMoEDefault"
         )
+        mock_platform.get_diffusion_model_impl_kwargs.side_effect = lambda op_name, kwargs: kwargs
 
         mocker.patch.object(
             hunyuan_moe,
@@ -78,6 +79,7 @@ class TestHunyuanFusedMoEPlatformDispatch:
         HunyuanFusedMoE(prefix="")
 
         mock_platform.prepare_diffusion_op_runtime.assert_called_once_with("hunyuan_fused_moe")
+        mock_platform.get_diffusion_model_impl_kwargs.assert_called_once_with("hunyuan_fused_moe", {})
         mock_platform.get_diffusion_model_impl_qualname.assert_called_once_with("hunyuan_fused_moe")
         mock_resolve.assert_called_once_with(
             "vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe.HunyuanFusedMoEDefault"
@@ -99,6 +101,7 @@ class TestHunyuanFusedMoEFactory:
 
         mock_platform = mocker.MagicMock()
         mock_platform.get_diffusion_model_impl_qualname.return_value = "mock.impl.Qualname"
+        mock_platform.get_diffusion_model_impl_kwargs.side_effect = lambda op_name, kwargs: kwargs
         mocker.patch.object(hunyuan_moe, "current_omni_platform", mock_platform)
 
         mock_impl_class = mocker.MagicMock(return_value=MockImpl(prefix="test", a=1))
@@ -114,8 +117,30 @@ class TestHunyuanFusedMoEFactory:
         assert result.prefix == "test"
         assert result.kwargs == {"a": 1}
         mock_platform.prepare_diffusion_op_runtime.assert_called_once_with("hunyuan_fused_moe")
+        mock_platform.get_diffusion_model_impl_kwargs.assert_called_once_with("hunyuan_fused_moe", {"a": 1})
         mock_platform.get_diffusion_model_impl_qualname.assert_called_once_with("hunyuan_fused_moe")
         mock_impl_class.assert_called_once_with(prefix="test", a=1)
+
+    def test_new_uses_platform_impl_kwargs(self, mocker):
+        """Platform kwargs hook should keep NPU-only params out of the generic model."""
+        import vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe as hunyuan_moe
+
+        mock_platform = mocker.MagicMock()
+        mock_platform.get_diffusion_model_impl_qualname.return_value = "mock.impl.Qualname"
+        mock_platform.get_diffusion_model_impl_kwargs.return_value = {"a": 1, "tokens_full": True}
+        mocker.patch.object(hunyuan_moe, "current_omni_platform", mock_platform)
+
+        mock_impl_class = mocker.MagicMock()
+        mocker.patch.object(hunyuan_moe, "resolve_obj_by_qualname", return_value=mock_impl_class)
+
+        from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
+            HunyuanFusedMoE,
+        )
+
+        HunyuanFusedMoE(prefix="test", a=1)
+
+        mock_platform.get_diffusion_model_impl_kwargs.assert_called_once_with("hunyuan_fused_moe", {"a": 1})
+        mock_impl_class.assert_called_once_with(prefix="test", a=1, tokens_full=True)
 
     def test_make_expert_params_mapping_delegates_to_impl(self, mocker):
         """make_expert_params_mapping should delegate to impl class method."""
