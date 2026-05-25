@@ -40,20 +40,29 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
     """NPU adapter that executes HunyuanImage3 MoE with MindIE-SD."""
 
     def __init__(self, *, prefix: str = "", **kwargs: Any) -> None:
-        self.tp_group = kwargs.pop("tp_group", None)
-        self.ep_group = kwargs.pop("ep_group", None)
-        self.tokens_full = kwargs.pop("tokens_full", None)
-        if self.tokens_full is None:
-            self.tokens_full = kwargs.pop("input_is_full", True)
+        # Extract NPU-specific kwargs before calling super().__init__();
+        # nn.Module.__setattr__ blocks attribute assignment before Module.__init__().
+        tp_group = kwargs.pop("tp_group", None)
+        ep_group = kwargs.pop("ep_group", None)
+        tokens_full = kwargs.pop("tokens_full", None)
+        if tokens_full is None:
+            tokens_full = kwargs.pop("input_is_full", True)
         else:
             kwargs.pop("input_is_full", None)
-        self.reduce_results = kwargs.pop("reduce_results", None)
-        self.dispatcher_type = kwargs.pop("dispatcher_type", None)
-        self._mindiesd_shared_experts = kwargs.get("shared_experts")
+        reduce_results = kwargs.pop("reduce_results", None)
+        dispatcher_type = kwargs.pop("dispatcher_type", None)
+        mindiesd_shared_experts = kwargs.get("shared_experts")
         if kwargs.get("quant_config") is not None:
             raise NotImplementedError("Quantized MindIE-SD fused_moe is not implemented yet.")
 
         super().__init__(prefix=prefix, **kwargs)
+
+        self.tp_group = tp_group
+        self.ep_group = ep_group
+        self.tokens_full = tokens_full
+        self.reduce_results = reduce_results
+        self.dispatcher_type = dispatcher_type
+        self._mindiesd_shared_experts = mindiesd_shared_experts
         self._mindiesd_weights_prepared = False
         process_weights_after_loading = self.quant_method.process_weights_after_loading
 
