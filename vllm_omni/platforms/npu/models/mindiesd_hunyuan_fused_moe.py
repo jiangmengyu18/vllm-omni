@@ -13,7 +13,7 @@ from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
 
 
 def _group_is_enabled(group: Any | None) -> bool:
-    return group is not None and getattr(group, "world_size", 1) > 1
+    return group is not None and dist.get_world_size(group) > 1
 
 
 class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):

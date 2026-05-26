@@ -83,7 +83,8 @@ def test_forward_adds_shared_experts(mocker):
     _install_fake_mindiesd(mocker, fused_moe)
     mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
     all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
-    tp_group = mocker.Mock(world_size=2)
+    mocker.patch.object(moe_module.dist, "get_world_size", return_value=2)
+    tp_group = object()
 
     layer = _make_layer(moe_module, shared_experts=shared_experts)
     layer.tp_group = tp_group
