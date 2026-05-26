@@ -8,7 +8,7 @@ def _group(world_size, device_group):
     return SimpleNamespace(world_size=world_size, device_group=device_group)
 
 
-def _resolve_kwargs(mocker, *, device_type, tp_world_size=1, ep_world_size=1):
+def _resolve_kwargs(mocker, *, tp_world_size=1, ep_world_size=1):
     import vllm_omni.platforms.npu.platform as npu_platform
 
     tp_device_group = object()
@@ -18,51 +18,24 @@ def _resolve_kwargs(mocker, *, device_type, tp_world_size=1, ep_world_size=1):
     mocker.patch.object(npu_platform, "_has_mindiesd_fused_moe", return_value=True)
     mocker.patch.object(npu_platform, "get_tp_group", return_value=tp_group)
     mocker.patch.object(npu_platform, "_try_get_ep_group", return_value=ep_group)
-    mocker.patch.object(npu_platform, "get_ascend_device_type", return_value=device_type)
 
     kwargs = npu_platform.NPUOmniPlatform.get_diffusion_model_impl_kwargs("hunyuan_fused_moe", {})
     return kwargs, tp_device_group, ep_device_group
 
 
-def test_pure_tp_uses_static_dispatcher_on_a3(mocker):
-    import vllm_omni.platforms.npu.platform as npu_platform
+def test_pure_tp_passes_tp_group_without_dispatcher_override(mocker):
+    kwargs, tp_device_group, _ = _resolve_kwargs(mocker, tp_world_size=2, ep_world_size=1)
 
-    kwargs, tp_device_group, _ = _resolve_kwargs(
-        mocker,
-        device_type=npu_platform.AscendDeviceType.A3,
-        tp_world_size=2,
-        ep_world_size=1,
-    )
-
-    assert kwargs["dispatcher_type"] == "static"
     assert kwargs["tp_group"] is tp_device_group
+    assert kwargs["tokens_full"] is True
     assert "ep_group" not in kwargs
+    assert kwargs["dispatcher_type"] is None
 
 
-def test_ep_uses_dynamic_dispatcher_on_a3(mocker):
-    import vllm_omni.platforms.npu.platform as npu_platform
+def test_ep_passes_ep_group_without_dispatcher_override(mocker):
+    kwargs, _, ep_device_group = _resolve_kwargs(mocker, tp_world_size=1, ep_world_size=2)
 
-    kwargs, _, ep_device_group = _resolve_kwargs(
-        mocker,
-        device_type=npu_platform.AscendDeviceType.A3,
-        tp_world_size=1,
-        ep_world_size=2,
-    )
-
-    assert kwargs["dispatcher_type"] == "dynamic"
     assert kwargs["ep_group"] is ep_device_group
+    assert kwargs["tokens_full"] is True
     assert "tp_group" not in kwargs
-
-
-def test_ep_uses_static_dispatcher_on_a2(mocker):
-    import vllm_omni.platforms.npu.platform as npu_platform
-
-    kwargs, _, ep_device_group = _resolve_kwargs(
-        mocker,
-        device_type=npu_platform.AscendDeviceType.A2,
-        tp_world_size=1,
-        ep_world_size=2,
-    )
-
-    assert kwargs["dispatcher_type"] == "static"
-    assert kwargs["ep_group"] is ep_device_group
+    assert kwargs["dispatcher_type"] is None

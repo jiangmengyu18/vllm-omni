@@ -12,24 +12,8 @@ from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
 )
 
 
-def _get_group_world_size(group: Any | None) -> int:
-    if group is None:
-        return 1
-    world_size = getattr(group, "world_size", None)
-    if isinstance(world_size, int):
-        return world_size
-    try:
-        return dist.get_world_size(group)
-    except (AssertionError, RuntimeError, ValueError, TypeError):
-        return 1
-
-
-def _is_group_enabled(group: Any | None) -> bool:
-    return _get_group_world_size(group) > 1
-
-
-def _is_static_dispatcher(dispatcher_type: str | None) -> bool:
-    return dispatcher_type != "dynamic"
+def _group_is_enabled(group: Any | None) -> bool:
+    return group is not None and getattr(group, "world_size", 1) > 1
 
 
 class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
@@ -45,7 +29,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             tokens_full = kwargs.pop("input_is_full", True)
         else:
             kwargs.pop("input_is_full", None)
-        reduce_results = kwargs.pop("reduce_results", None)
+        kwargs.pop("reduce_results", None)
         dispatcher_type = kwargs.pop("dispatcher_type", None)
         mindiesd_shared_experts = kwargs.get("shared_experts")
         if kwargs.get("quant_config") is not None:
@@ -56,7 +40,6 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
         self.tp_group = tp_group
         self.ep_group = ep_group
         self.tokens_full = tokens_full
-        self.reduce_results = reduce_results
         self.dispatcher_type = dispatcher_type
         self._mindiesd_shared_experts = mindiesd_shared_experts
         self._mindiesd_weights_prepared = False
@@ -68,32 +51,6 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
 
         self.quant_method.process_weights_after_loading = process_mindiesd_weights_after_loading
 
-    def _should_reduce_combined_tp_output(self) -> bool:
-        if self._mindiesd_shared_experts is None or not self.tokens_full or not _is_group_enabled(self.tp_group):
-            return False
-        if not _is_static_dispatcher(self.dispatcher_type):
-            return True
-        return _is_group_enabled(self.ep_group) or self.reduce_results is not True
-
-    def _should_reduce_routed_tp_output(self) -> bool:
-        return (
-            self._mindiesd_shared_experts is None
-            and self.tokens_full
-            and _is_group_enabled(self.tp_group)
-            and _is_group_enabled(self.ep_group)
-        )
-
-    def _reduce_routed_results(self, reduce_combined_tp_output: bool) -> bool | None:
-        if self.reduce_results is not None:
-            return self.reduce_results
-        if not _is_static_dispatcher(self.dispatcher_type) or self._mindiesd_shared_experts is None:
-            return None
-        if _is_group_enabled(self.ep_group):
-            return True
-        if reduce_combined_tp_output:
-            return False
-        return None
-
     def _prepare_mindiesd_weights(self) -> None:
         if self._mindiesd_weights_prepared:
             return
@@ -101,22 +58,17 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
         self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
         self._mindiesd_weights_prepared = True
 
-    def _forward_shared_experts(
-        self,
-        hidden_states: torch.Tensor,
-        reduce_combined_tp_output: bool,
-    ) -> torch.Tensor | None:
+    def _forward_shared_experts(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
         if self._mindiesd_shared_experts is None:
             return None
         shared_out = self._mindiesd_shared_experts(hidden_states)
-        if _is_group_enabled(self.tp_group) and not reduce_combined_tp_output:
+        if _group_is_enabled(self.tp_group):
             dist.all_reduce(shared_out, group=self.tp_group)
         return shared_out
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor) -> torch.Tensor:
         self._prepare_mindiesd_weights()
         _set_forward_context_num_tokens(hidden_states.shape[0])
-        reduce_combined_tp_output = self._should_reduce_combined_tp_output()
 
         from mindiesd.layers.fused_moe import fused_moe
 
@@ -130,19 +82,14 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             w13_bias=getattr(self, "w13_bias", None),
             w2_bias=getattr(self, "w2_bias", None),
             tokens_full=self.tokens_full,
-            reduce_results=self._reduce_routed_results(reduce_combined_tp_output),
+            reduce_results=True,
             dispatcher_type=self.dispatcher_type,
             tp_group=self.tp_group,
             ep_group=self.ep_group,
             renormalize=self.renormalize,
             custom_routing_function=self.custom_routing_function,
         )
-        if self._should_reduce_routed_tp_output():
-            dist.all_reduce(routed_out, group=self.tp_group)
-        shared_out = self._forward_shared_experts(hidden_states, reduce_combined_tp_output)
+        shared_out = self._forward_shared_experts(hidden_states)
         if shared_out is None:
             return routed_out
-        output = routed_out + shared_out
-        if reduce_combined_tp_output:
-            dist.all_reduce(output, group=self.tp_group)
-        return output
+        return routed_out + shared_out

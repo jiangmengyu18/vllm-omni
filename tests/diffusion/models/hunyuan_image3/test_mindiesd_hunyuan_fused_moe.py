@@ -31,17 +31,12 @@ def _make_layer(moe_module, shared_experts=None):
     layer.global_num_experts = 2
     layer.top_k = 1
     layer.tokens_full = True
-    layer.reduce_results = None
-    layer.dispatcher_type = "static"
+    layer.dispatcher_type = None
     layer.tp_group = None
     layer.ep_group = None
     layer.renormalize = False
     layer.custom_routing_function = None
     return layer
-
-
-def _mock_group_world_size(group):
-    return 2 if group is not None else 1
 
 
 def test_forward_calls_mindiesd_fused_moe(mocker):
@@ -69,8 +64,8 @@ def test_forward_calls_mindiesd_fused_moe(mocker):
         w13_bias=None,
         w2_bias=None,
         tokens_full=True,
-        reduce_results=None,
-        dispatcher_type="static",
+        reduce_results=True,
+        dispatcher_type=None,
         tp_group=None,
         ep_group=None,
         renormalize=False,
@@ -78,7 +73,7 @@ def test_forward_calls_mindiesd_fused_moe(mocker):
     )
 
 
-def test_forward_adds_shared_experts_and_reduces_tp(mocker):
+def test_forward_adds_shared_experts(mocker):
     import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
 
     routed_out = torch.ones(3, 4)
@@ -87,9 +82,8 @@ def test_forward_adds_shared_experts_and_reduces_tp(mocker):
     shared_experts = mocker.MagicMock(return_value=shared_out)
     _install_fake_mindiesd(mocker, fused_moe)
     mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
     all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
-    tp_group = object()
+    tp_group = mocker.Mock(world_size=2)
 
     layer = _make_layer(moe_module, shared_experts=shared_experts)
     layer.tp_group = tp_group
@@ -99,124 +93,9 @@ def test_forward_adds_shared_experts_and_reduces_tp(mocker):
     output = layer.forward(hidden_states, router_logits)
 
     shared_experts.assert_called_once_with(hidden_states)
-    all_reduce.assert_called_once()
-    assert all_reduce.call_args.kwargs["group"] is tp_group
-    assert all_reduce.call_args.args[0] is output
-    assert fused_moe.call_args.kwargs["reduce_results"] is False
-    assert torch.equal(output, routed_out + shared_out)
-
-
-def test_ep_keeps_routed_reduce_results_for_mindiesd(mocker):
-    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
-
-    fused_moe = mocker.MagicMock(return_value=torch.ones(3, 4))
-    shared_experts = mocker.MagicMock(return_value=torch.ones(3, 4))
-    _install_fake_mindiesd(mocker, fused_moe)
-    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(
-        moe_module,
-        "_get_group_world_size",
-        side_effect=_mock_group_world_size,
-    )
-    all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
-
-    layer = _make_layer(moe_module, shared_experts=shared_experts)
-    layer.tp_group = object()
-    layer.ep_group = object()
-    layer.dispatcher_type = "dynamic"
-
-    output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
-
-    assert fused_moe.call_args.kwargs["reduce_results"] is None
-    all_reduce.assert_called_once()
-    assert all_reduce.call_args.args[0] is output
-
-
-def test_static_ep_reduces_routed_output_inside_mindiesd(mocker):
-    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
-
-    routed_out = torch.ones(3, 4)
-    shared_out = torch.full((3, 4), 2.0)
-    fused_moe = mocker.MagicMock(return_value=routed_out)
-    shared_experts = mocker.MagicMock(return_value=shared_out)
-    _install_fake_mindiesd(mocker, fused_moe)
-    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
-    ep_group = object()
-
-    layer = _make_layer(moe_module, shared_experts=shared_experts)
-    layer.ep_group = ep_group
-
-    output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
-
+    all_reduce.assert_called_once_with(shared_out, group=tp_group)
     assert fused_moe.call_args.kwargs["reduce_results"] is True
     assert torch.equal(output, routed_out + shared_out)
-
-
-def test_static_ep_tp_reduces_routed_on_ep_and_combined_output_on_tp(mocker):
-    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
-
-    routed_out = torch.ones(3, 4)
-    shared_out = torch.full((3, 4), 2.0)
-    fused_moe = mocker.MagicMock(return_value=routed_out)
-    shared_experts = mocker.MagicMock(return_value=shared_out)
-    _install_fake_mindiesd(mocker, fused_moe)
-    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
-    all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
-    ep_group = object()
-    tp_group = object()
-
-    layer = _make_layer(moe_module, shared_experts=shared_experts)
-    layer.ep_group = ep_group
-    layer.tp_group = tp_group
-
-    output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
-
-    assert fused_moe.call_args.kwargs["reduce_results"] is True
-    all_reduce.assert_called_once()
-    assert all_reduce.call_args.args[0] is output
-    assert all_reduce.call_args.kwargs["group"] is tp_group
-
-
-def test_ep_tp_without_shared_reduces_routed_output_on_tp(mocker):
-    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
-
-    routed_out = torch.ones(3, 4)
-    fused_moe = mocker.MagicMock(return_value=routed_out)
-    _install_fake_mindiesd(mocker, fused_moe)
-    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
-    all_reduce = mocker.patch.object(moe_module.dist, "all_reduce")
-
-    layer = _make_layer(moe_module)
-    layer.tp_group = object()
-    layer.ep_group = object()
-    layer.dispatcher_type = "dynamic"
-
-    output = layer.forward(torch.randn(3, 4), torch.randn(3, 2))
-
-    assert output is routed_out
-    all_reduce.assert_called_once_with(routed_out, group=layer.tp_group)
-
-
-def test_explicit_reduce_results_is_preserved(mocker):
-    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
-
-    fused_moe = mocker.MagicMock(return_value=torch.ones(3, 4))
-    shared_experts = mocker.MagicMock(return_value=torch.ones(3, 4))
-    _install_fake_mindiesd(mocker, fused_moe)
-    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
-    mocker.patch.object(moe_module, "_get_group_world_size", side_effect=_mock_group_world_size)
-    mocker.patch.object(moe_module.dist, "all_reduce")
-
-    layer = _make_layer(moe_module, shared_experts=shared_experts)
-    layer.tp_group = object()
-    layer.reduce_results = True
-
-    layer.forward(torch.randn(3, 4), torch.randn(3, 2))
-
-    assert fused_moe.call_args.kwargs["reduce_results"] is True
 
 
 def test_prepare_mindiesd_weights_transposes_once():

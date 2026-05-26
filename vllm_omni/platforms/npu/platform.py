@@ -11,7 +11,6 @@ from vllm.distributed import get_ep_group
 from vllm.distributed.parallel_state import get_tp_group
 from vllm.logger import init_logger
 from vllm_ascend.platform import NPUPlatform
-from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
 
 from vllm_omni.diffusion.attention.backends.registry import DiffusionAttentionBackendEnum
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
@@ -35,12 +34,6 @@ def _try_get_ep_group() -> Any | None:
 
 def _group_is_enabled(group: Any | None) -> bool:
     return group is not None and getattr(group, "world_size", 1) > 1
-
-
-def _get_mindiesd_dispatcher_type(ep_group: Any | None) -> str:
-    if _group_is_enabled(ep_group) and get_ascend_device_type() in {AscendDeviceType.A3, AscendDeviceType.A5}:
-        return "dynamic"
-    return "static"
 
 
 _DIFFUSION_PACKED_MODULES_MAPPING = {
@@ -115,7 +108,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
             if _group_is_enabled(ep_group):
                 kwargs["ep_group"] = ep_group.device_group
             kwargs.setdefault("tokens_full", True)
-            kwargs.setdefault("dispatcher_type", _get_mindiesd_dispatcher_type(ep_group))
+            kwargs.setdefault("dispatcher_type", None)
         return kwargs
 
     @classmethod
