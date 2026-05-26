@@ -5,7 +5,6 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
     HunyuanFusedMoEDefault,
@@ -70,26 +69,6 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor) -> torch.Tensor:
         self._prepare_mindiesd_weights()
         _set_forward_context_num_tokens(hidden_states.shape[0])
-        full_hidden_states = hidden_states
-        tokens_full = True
-        original_num_tokens = hidden_states.shape[0]
-        pad_size = 0
-        token_shard_group = None
-        if _group_is_enabled(self.ep_group):
-            token_shard_group = self.ep_group
-        elif _group_is_enabled(self.tp_group):
-            token_shard_group = self.tp_group
-
-        if token_shard_group is not None:
-            tokens_full = False
-            token_shard_size = dist.get_world_size(token_shard_group)
-            token_shard_rank = dist.get_rank(token_shard_group)
-            pad_size = (token_shard_size - original_num_tokens % token_shard_size) % token_shard_size
-            if pad_size > 0:
-                hidden_states = F.pad(hidden_states, (0, 0, 0, pad_size))
-                router_logits = F.pad(router_logits, (0, 0, 0, pad_size))
-            hidden_states = torch.tensor_split(hidden_states, token_shard_size, dim=0)[token_shard_rank].contiguous()
-            router_logits = torch.tensor_split(router_logits, token_shard_size, dim=0)[token_shard_rank].contiguous()
 
         from mindiesd.layers.fused_moe import fused_moe
 
@@ -102,7 +81,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             top_k=self.top_k,
             w13_bias=getattr(self, "w13_bias", None),
             w2_bias=getattr(self, "w2_bias", None),
-            tokens_full=tokens_full,
+            tokens_full=self.tokens_full,
             reduce_results=True,
             dispatcher_type=self.dispatcher_type,
             tp_group=self.tp_group,
@@ -110,14 +89,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             renormalize=self.renormalize,
             custom_routing_function=self.custom_routing_function,
         )
-        if not tokens_full:
-            gathered_out = torch.empty(
-                original_num_tokens + pad_size, routed_out.shape[-1], dtype=routed_out.dtype, device=routed_out.device
-            )
-            dist.all_gather_into_tensor(gathered_out, routed_out.contiguous(), group=token_shard_group)
-            routed_out = gathered_out[:original_num_tokens]
-
-        shared_out = self._forward_shared_experts(full_hidden_states)
+        shared_out = self._forward_shared_experts(hidden_states)
         if shared_out is None:
             return routed_out
         return routed_out + shared_out
