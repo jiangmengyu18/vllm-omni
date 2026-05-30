@@ -74,20 +74,20 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
 
         routed_out = fused_moe(
             hidden_states=hidden_states,
-            w13_weight=self.w13_weight,
-            w2_weight=self.w2_weight,
             router_logits=router_logits,
             num_experts=self.global_num_experts,
             top_k=self.top_k,
+            w13_weight=self.w13_weight,
+            w2_weight=self.w2_weight,
             w13_bias=getattr(self, "w13_bias", None),
             w2_bias=getattr(self, "w2_bias", None),
-            tokens_full=self.tokens_full,
-            reduce_results=True,
-            dispatcher_type=self.dispatcher_type,
             tp_group=self.tp_group,
             ep_group=self.ep_group,
+            dispatcher_type=self.dispatcher_type,
+            tokens_full=self.tokens_full,
             renormalize=self.renormalize,
             custom_routing_function=self.custom_routing_function,
+            reduce_results=True,
         )
         shared_out = self._forward_shared_experts(hidden_states)
         if shared_out is None:

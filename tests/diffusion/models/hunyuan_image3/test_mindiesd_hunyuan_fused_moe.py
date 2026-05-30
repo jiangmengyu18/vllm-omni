@@ -56,20 +56,20 @@ def test_forward_calls_mindiesd_fused_moe(mocker):
     assert output is routed_out
     fused_moe.assert_called_once_with(
         hidden_states=hidden_states,
-        w13_weight=layer.w13_weight,
-        w2_weight=layer.w2_weight,
         router_logits=router_logits,
         num_experts=2,
         top_k=1,
+        w13_weight=layer.w13_weight,
+        w2_weight=layer.w2_weight,
         w13_bias=None,
         w2_bias=None,
-        tokens_full=True,
-        reduce_results=True,
-        dispatcher_type=None,
         tp_group=None,
         ep_group=None,
+        dispatcher_type=None,
+        tokens_full=True,
         renormalize=False,
         custom_routing_function=None,
+        reduce_results=True,
     )
 
 
