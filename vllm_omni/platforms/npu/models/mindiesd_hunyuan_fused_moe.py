@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
+import torch_npu
 
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
     HunyuanFusedMoEDefault,
@@ -32,8 +33,11 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
         kwargs.pop("reduce_results", None)
         dispatcher_type = kwargs.pop("dispatcher_type", None)
         mindiesd_shared_experts = kwargs.get("shared_experts")
-        if kwargs.get("quant_config") is not None:
-            raise NotImplementedError("Quantized MindIE-SD fused_moe is not implemented yet.")
+
+        # `--quantization ascend` passes quant_config (e.g. AscendModelSlimConfig).
+        # We handle both quantized and unquantized paths in _prepare_mindiesd_weights
+        # by checking the actual weight dtype.
+        self._quant_type = "none"
 
         super().__init__(prefix=prefix, **kwargs)
 
@@ -54,8 +58,40 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
     def _prepare_mindiesd_weights(self) -> None:
         if self._mindiesd_weights_prepared:
             return
-        self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
-        self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
+
+        if self.w13_weight.dtype == torch.int8:
+            # --- Quantized path (e.g. --quantization ascend with W8A8_DYNAMIC) ---
+            # After AscendW8A8DynamicFusedMoEMethod.process_weights_after_loading:
+            #   w13_weight: [E, H, 2*I] int8, NZ format
+            #   w13_weight_scale: [E, 2*I]
+            #   w2_weight: [E, I, H] int8, NZ format
+            #   w2_weight_scale: [E, H]
+            self._quant_type = "int8"
+
+            # Remove NZ format for MindIE-SD grouped_matmul
+            self.w13_weight.data = torch_npu.npu_format_cast(self.w13_weight.data, 0)
+            self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, 0)
+
+            # Reshape scales: [E, N] -> [E, 1, N] for MindIE-SD
+            self.register_buffer(
+                "w13_scale",
+                self.w13_weight_scale.data.view(
+                    self.w13_weight.shape[0], 1, self.w13_weight.shape[2]
+                ),
+            )
+            self.register_buffer(
+                "w2_scale",
+                self.w2_weight_scale.data.view(
+                    self.w2_weight.shape[0], 1, self.w2_weight.shape[2]
+                ),
+            )
+        else:
+            # --- Unquantized path ---
+            # Original layout: [E, 2*I, H] -> transpose to [E, H, 2*I] for MindIE-SD
+            self._quant_type = "none"
+            self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
+            self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
+
         self._mindiesd_weights_prepared = True
 
     def _forward_shared_experts(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
@@ -72,23 +108,29 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
 
         from mindiesd.layers.fused_moe import fused_moe
 
-        routed_out = fused_moe(
-            hidden_states=hidden_states,
-            router_logits=router_logits,
-            num_experts=self.global_num_experts,
-            top_k=self.top_k,
-            w13_weight=self.w13_weight,
-            w2_weight=self.w2_weight,
-            w13_bias=getattr(self, "w13_bias", None),
-            w2_bias=getattr(self, "w2_bias", None),
-            tp_group=self.tp_group,
-            ep_group=self.ep_group,
-            dispatcher_type=self.dispatcher_type,
-            tokens_full=self.tokens_full,
-            renormalize=self.renormalize,
-            custom_routing_function=self.custom_routing_function,
-            reduce_results=True,
-        )
+        moe_kwargs = {
+            "hidden_states": hidden_states,
+            "router_logits": router_logits,
+            "num_experts": self.global_num_experts,
+            "top_k": self.top_k,
+            "w13_weight": self.w13_weight,
+            "w2_weight": self.w2_weight,
+            "w13_bias": getattr(self, "w13_bias", None),
+            "w2_bias": getattr(self, "w2_bias", None),
+            "quant_type": self._quant_type,
+            "tp_group": self.tp_group,
+            "ep_group": self.ep_group,
+            "dispatcher_type": self.dispatcher_type,
+            "tokens_full": self.tokens_full,
+            "renormalize": self.renormalize,
+            "custom_routing_function": self.custom_routing_function,
+            "reduce_results": True,
+        }
+        if self._quant_type == "int8":
+            moe_kwargs["w13_scale"] = self.w13_scale
+            moe_kwargs["w2_scale"] = self.w2_scale
+
+        routed_out = fused_moe(**moe_kwargs)
         shared_out = self._forward_shared_experts(hidden_states)
         if shared_out is None:
             return routed_out
