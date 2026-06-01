@@ -124,7 +124,26 @@ def test_forward_passes_int8_weight_scales_to_mindiesd(mocker):
     assert fused_moe.call_args.kwargs["w2_weight_scale"] is layer.w2_weight_scale
 
 
-def test_prepare_mindiesd_weights_transposes_once():
+def test_init_uses_mindiesd_weight_prepare_without_vllm_ascend_postprocess(mocker):
+    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
+
+    original_process = mocker.MagicMock()
+    quant_method = types.SimpleNamespace(process_weights_after_loading=original_process)
+
+    def fake_super_init(self, prefix="", **kwargs):
+        self.quant_method = quant_method
+
+    mocker.patch.object(moe_module.HunyuanFusedMoEDefault, "__init__", fake_super_init)
+
+    layer = moe_module.MindIESDHunyuanFusedMoE()
+    target_layer = types.SimpleNamespace(_prepare_mindiesd_weights=mocker.MagicMock())
+    layer.quant_method.process_weights_after_loading(target_layer)
+
+    original_process.assert_not_called()
+    target_layer._prepare_mindiesd_weights.assert_called_once_with()
+
+
+def test_prepare_mindiesd_weights_normalizes_vllm_layout_once():
     import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
 
     layer = _make_layer(moe_module)
@@ -143,22 +162,28 @@ def test_prepare_mindiesd_weights_transposes_once():
     assert layer.w2_weight is first_w2
 
 
-def test_prepare_mindiesd_int8_weights_keeps_vllm_ascend_scales(mocker):
+def test_prepare_mindiesd_int8_weights_transposes_vllm_layout_and_keeps_scales(mocker):
     import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
 
     layer = _make_layer(moe_module)
     layer._mindiesd_weights_prepared = False
-    layer.w13_weight = torch.randint(-8, 8, (2, 4, 16), dtype=torch.int8)
-    layer.w2_weight = torch.randint(-8, 8, (2, 8, 4), dtype=torch.int8)
+    layer.w13_weight = torch.randint(-8, 8, (2, 16, 4), dtype=torch.int8)
+    layer.w2_weight = torch.randint(-8, 8, (2, 4, 8), dtype=torch.int8)
+    w13_weight = layer.w13_weight
+    w2_weight = layer.w2_weight
     layer.w13_weight_scale = torch.randn(2, 16)
-    layer.w2_weight_scale = torch.randn(2, 4)
+    layer.w2_weight_scale = torch.randn(2, 8)
     format_cast = mocker.patch.object(moe_module.torch_npu, "npu_format_cast", side_effect=lambda tensor, _: tensor)
 
     layer._prepare_mindiesd_weights()
 
     assert layer._quant_type == "int8"
+    assert torch.equal(layer.w13_weight, w13_weight.transpose(-1, -2).contiguous())
+    assert torch.equal(layer.w2_weight, w2_weight.transpose(-1, -2).contiguous())
     assert layer.w13_weight_scale.shape == (2, 16)
-    assert layer.w2_weight_scale.shape == (2, 4)
+    assert layer.w2_weight_scale.shape == (2, 8)
     assert not hasattr(layer, "w13_scale")
     assert not hasattr(layer, "w2_scale")
     assert format_cast.call_count == 2
+    assert format_cast.call_args_list[0].args[1] == moe_module.ACL_FORMAT_FRACTAL_NZ
+    assert format_cast.call_args_list[1].args[1] == moe_module.ACL_FORMAT_FRACTAL_NZ

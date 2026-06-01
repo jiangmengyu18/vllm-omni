@@ -6,6 +6,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 import torch_npu
+from vllm_ascend.utils import ACL_FORMAT_FRACTAL_NZ
 
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import (
     HunyuanFusedMoEDefault,
@@ -47,10 +48,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
         self.dispatcher_type = dispatcher_type
         self._mindiesd_shared_experts = mindiesd_shared_experts
         self._mindiesd_weights_prepared = False
-        process_weights_after_loading = self.quant_method.process_weights_after_loading
-
         def process_mindiesd_weights_after_loading(layer: Any) -> None:
-            process_weights_after_loading(layer)
             layer._prepare_mindiesd_weights()
 
         self.quant_method.process_weights_after_loading = process_mindiesd_weights_after_loading
@@ -61,19 +59,15 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
 
         if self.w13_weight.dtype == torch.int8:
             # --- Quantized path (e.g. --quantization ascend with W8A8_DYNAMIC) ---
-            # After AscendW8A8DynamicFusedMoEMethod.process_weights_after_loading:
-            #   w13_weight: [E, H, 2*I] int8, NZ format
-            #   w13_weight_scale: [E, 2*I]
-            #   w2_weight: [E, I, H] int8, NZ format
-            #   w2_weight_scale: [E, H]
             self._quant_type = "int8"
 
-            # Remove NZ format for MindIE-SD grouped_matmul
-            self.w13_weight.data = torch_npu.npu_format_cast(self.w13_weight.data, 0)
-            self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, 0)
+            # MindIE-SD expects [E, H, 2I] and [E, I, H]; INT8 fused swiglu quant requires NZ weights.
+            self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
+            self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
+            self.w13_weight.data = torch_npu.npu_format_cast(self.w13_weight.data, ACL_FORMAT_FRACTAL_NZ)
+            self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, ACL_FORMAT_FRACTAL_NZ)
         else:
             # --- Unquantized path ---
-            # Original layout: [E, 2*I, H] -> transpose to [E, H, 2*I] for MindIE-SD
             self._quant_type = "none"
             self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
             self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
