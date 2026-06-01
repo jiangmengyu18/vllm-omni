@@ -34,6 +34,7 @@ def _make_layer(moe_module, shared_experts=None):
     layer.dispatcher_type = None
     layer.tp_group = None
     layer.ep_group = None
+    layer._quant_type = "none"
     layer.renormalize = False
     layer.custom_routing_function = None
     return layer
@@ -63,6 +64,7 @@ def test_forward_calls_mindiesd_fused_moe(mocker):
         w2_weight=layer.w2_weight,
         w13_bias=None,
         w2_bias=None,
+        quant_type="none",
         tp_group=None,
         ep_group=None,
         dispatcher_type=None,
@@ -99,6 +101,29 @@ def test_forward_adds_shared_experts(mocker):
     assert torch.equal(output, routed_out + shared_out)
 
 
+def test_forward_passes_int8_weight_scales_to_mindiesd(mocker):
+    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
+
+    routed_out = torch.randn(3, 4)
+    fused_moe = mocker.MagicMock(return_value=routed_out)
+    _install_fake_mindiesd(mocker, fused_moe)
+    mocker.patch.object(moe_module, "_set_forward_context_num_tokens")
+
+    layer = _make_layer(moe_module)
+    layer._quant_type = "int8"
+    layer.w13_weight_scale = torch.randn(2, 16)
+    layer.w2_weight_scale = torch.randn(2, 4)
+    hidden_states = torch.randn(3, 4)
+    router_logits = torch.randn(3, 2)
+
+    output = layer.forward(hidden_states, router_logits)
+
+    assert output is routed_out
+    assert fused_moe.call_args.kwargs["quant_type"] == "int8"
+    assert fused_moe.call_args.kwargs["w13_weight_scale"] is layer.w13_weight_scale
+    assert fused_moe.call_args.kwargs["w2_weight_scale"] is layer.w2_weight_scale
+
+
 def test_prepare_mindiesd_weights_transposes_once():
     import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
 
@@ -116,3 +141,24 @@ def test_prepare_mindiesd_weights_transposes_once():
     assert torch.equal(first_w2, w2_weight.transpose(-1, -2).contiguous())
     assert layer.w13_weight is first_w13
     assert layer.w2_weight is first_w2
+
+
+def test_prepare_mindiesd_int8_weights_keeps_vllm_ascend_scales(mocker):
+    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
+
+    layer = _make_layer(moe_module)
+    layer._mindiesd_weights_prepared = False
+    layer.w13_weight = torch.randint(-8, 8, (2, 4, 16), dtype=torch.int8)
+    layer.w2_weight = torch.randint(-8, 8, (2, 8, 4), dtype=torch.int8)
+    layer.w13_weight_scale = torch.randn(2, 16)
+    layer.w2_weight_scale = torch.randn(2, 4)
+    format_cast = mocker.patch.object(moe_module.torch_npu, "npu_format_cast", side_effect=lambda tensor, _: tensor)
+
+    layer._prepare_mindiesd_weights()
+
+    assert layer._quant_type == "int8"
+    assert layer.w13_weight_scale.shape == (2, 16)
+    assert layer.w2_weight_scale.shape == (2, 4)
+    assert not hasattr(layer, "w13_scale")
+    assert not hasattr(layer, "w2_scale")
+    assert format_cast.call_count == 2

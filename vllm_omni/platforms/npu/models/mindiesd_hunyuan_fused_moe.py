@@ -71,20 +71,6 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             # Remove NZ format for MindIE-SD grouped_matmul
             self.w13_weight.data = torch_npu.npu_format_cast(self.w13_weight.data, 0)
             self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, 0)
-
-            # Reshape scales: [E, N] -> [E, 1, N] for MindIE-SD
-            self.register_buffer(
-                "w13_scale",
-                self.w13_weight_scale.data.view(
-                    self.w13_weight.shape[0], 1, self.w13_weight.shape[2]
-                ),
-            )
-            self.register_buffer(
-                "w2_scale",
-                self.w2_weight_scale.data.view(
-                    self.w2_weight.shape[0], 1, self.w2_weight.shape[2]
-                ),
-            )
         else:
             # --- Unquantized path ---
             # Original layout: [E, 2*I, H] -> transpose to [E, H, 2*I] for MindIE-SD
@@ -127,8 +113,8 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             "reduce_results": True,
         }
         if self._quant_type == "int8":
-            moe_kwargs["w13_scale"] = self.w13_scale
-            moe_kwargs["w2_scale"] = self.w2_scale
+            moe_kwargs["w13_weight_scale"] = self.w13_weight_scale
+            moe_kwargs["w2_weight_scale"] = self.w2_weight_scale
 
         routed_out = fused_moe(**moe_kwargs)
         shared_out = self._forward_shared_experts(hidden_states)
