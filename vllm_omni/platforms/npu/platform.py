@@ -85,8 +85,6 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     def prepare_diffusion_op_runtime(cls, op_name: str, **kwargs: Any) -> None:
         if op_name != "hunyuan_fused_moe":
             return
-        if _has_mindiesd_fused_moe():
-            return
 
         from vllm_omni.platforms.npu.models.hunyuan_fused_moe import (
             prepare_hunyuan_fused_moe_runtime,
