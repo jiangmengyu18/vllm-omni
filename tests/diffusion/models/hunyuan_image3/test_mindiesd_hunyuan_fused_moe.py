@@ -171,8 +171,8 @@ def test_prepare_mindiesd_int8_weights_transposes_vllm_layout_and_keeps_scales(m
     layer.w2_weight = torch.randint(-8, 8, (2, 4, 8), dtype=torch.int8)
     w13_weight = layer.w13_weight
     w2_weight = layer.w2_weight
-    layer.w13_weight_scale = torch.randn(2, 16)
-    layer.w2_weight_scale = torch.randn(2, 8)
+    layer.w13_weight_scale = torch.randn(2, 16, 1)
+    layer.w2_weight_scale = torch.randn(2, 8, 1)
     format_cast = mocker.patch.object(moe_module.torch_npu, "npu_format_cast", side_effect=lambda tensor, _: tensor)
 
     layer._prepare_mindiesd_weights()

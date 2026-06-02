@@ -66,6 +66,8 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
             self.w13_weight.data = torch_npu.npu_format_cast(self.w13_weight.data, ACL_FORMAT_FRACTAL_NZ)
             self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, ACL_FORMAT_FRACTAL_NZ)
+            self.w13_weight_scale.data = self.w13_weight_scale.data.reshape(self.w13_weight_scale.shape[0], -1)
+            self.w2_weight_scale.data = self.w2_weight_scale.data.reshape(self.w2_weight_scale.shape[0], -1)
         else:
             # --- Unquantized path ---
             self._quant_type = "none"
