@@ -38,7 +38,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
         # `--quantization ascend` passes quant_config (e.g. AscendModelSlimConfig).
         # We handle both quantized and unquantized paths in _prepare_mindiesd_weights
         # by checking the actual weight dtype.
-        self._quant_type = "none"
+        self._mindiesd_quant_config = None
 
         super().__init__(prefix=prefix, **kwargs)
 
@@ -59,7 +59,10 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
 
         if self.w13_weight.dtype == torch.int8:
             # --- Quantized path (e.g. --quantization ascend with W8A8_DYNAMIC) ---
-            self._quant_type = "int8"
+            from mindiesd.quantization.config import QuantConfig
+            from mindiesd.quantization.mode import QuantAlgorithm
+
+            self._mindiesd_quant_config = QuantConfig(quant_algo=QuantAlgorithm.W8A8_DYNAMIC)
 
             # MindIE-SD expects [E, H, 2I] and [E, I, H]; INT8 fused swiglu quant requires NZ weights.
             self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
@@ -70,7 +73,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             self.w2_weight_scale.data = self.w2_weight_scale.data.reshape(self.w2_weight_scale.shape[0], -1)
         else:
             # --- Unquantized path ---
-            self._quant_type = "none"
+            self._mindiesd_quant_config = None
             self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
             self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
 
@@ -99,7 +102,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             "w2_weight": self.w2_weight,
             "w13_bias": getattr(self, "w13_bias", None),
             "w2_bias": getattr(self, "w2_bias", None),
-            "quant_type": self._quant_type,
+            "quant_config": self._mindiesd_quant_config,
             "tp_group": self.tp_group,
             "ep_group": self.ep_group,
             "dispatcher_type": self.dispatcher_type,
@@ -108,7 +111,7 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             "custom_routing_function": self.custom_routing_function,
             "reduce_results": True,
         }
-        if self._quant_type == "int8":
+        if self._mindiesd_quant_config is not None:
             moe_kwargs["w13_weight_scale"] = self.w13_weight_scale
             moe_kwargs["w2_weight_scale"] = self.w2_weight_scale
 
