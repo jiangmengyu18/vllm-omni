@@ -47,6 +47,7 @@ class HunyuanFusedMoE:
     def __new__(cls, *, prefix: str = "", **kwargs: Any) -> Any:
         op_name = "hunyuan_fused_moe"
         current_omni_platform.prepare_diffusion_op_runtime(op_name)
+        kwargs = current_omni_platform.get_diffusion_model_impl_kwargs(op_name, kwargs)
         impl = resolve_obj_by_qualname(
             current_omni_platform.get_diffusion_model_impl_qualname(op_name),
         )
