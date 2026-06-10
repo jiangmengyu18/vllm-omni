@@ -52,6 +52,7 @@ def _install_fake_mindiesd_quant(mocker):
 
     class QuantAlgorithm:
         W8A8_DYNAMIC = "W8A8_DYNAMIC"
+        W8A8_MXFP8 = "W8A8_MXFP8"
 
     config_module.QuantConfig = QuantConfig
     mode_module.QuantAlgorithm = QuantAlgorithm
@@ -215,3 +216,30 @@ def test_prepare_mindiesd_w8a8_dynamic_weights_transposes_vllm_layout_and_keeps_
     assert format_cast.call_count == 2
     assert format_cast.call_args_list[0].args[1] == moe_module.ACL_FORMAT_FRACTAL_NZ
     assert format_cast.call_args_list[1].args[1] == moe_module.ACL_FORMAT_FRACTAL_NZ
+
+
+def test_prepare_mindiesd_w8a8_mxfp8_weights_match_vllm_ascend_layout(mocker):
+    import vllm_omni.platforms.npu.models.mindiesd_hunyuan_fused_moe as moe_module
+
+    quant_algorithm = _install_fake_mindiesd_quant(mocker)
+    mocker.patch.object(moe_module.torch_npu, "float8_e4m3fn", torch.float16, create=True)
+    layer = _make_layer(moe_module)
+    layer._mindiesd_weights_prepared = False
+    layer.w13_weight = torch.randn(2, 16, 4, dtype=torch.float16)
+    layer.w2_weight = torch.randn(2, 4, 8, dtype=torch.float16)
+    w13_weight = layer.w13_weight
+    w2_weight = layer.w2_weight
+    layer.w13_weight_scale = torch.randn(2, 16, 2)
+    layer.w2_weight_scale = torch.randn(2, 8, 2)
+    w13_weight_scale = layer.w13_weight_scale
+    w2_weight_scale = layer.w2_weight_scale
+    format_cast = mocker.patch.object(moe_module.torch_npu, "npu_format_cast")
+
+    layer._prepare_mindiesd_weights()
+
+    assert layer._mindiesd_quant_config.quant_algo == quant_algorithm.W8A8_MXFP8
+    assert torch.equal(layer.w13_weight, w13_weight.transpose(1, 2).contiguous())
+    assert torch.equal(layer.w2_weight, w2_weight.transpose(1, 2).contiguous())
+    assert torch.equal(layer.w13_weight_scale, w13_weight_scale.reshape(2, 16, 1, 2).transpose(1, 2))
+    assert torch.equal(layer.w2_weight_scale, w2_weight_scale.reshape(2, 8, 1, 2).transpose(1, 2))
+    format_cast.assert_not_called()

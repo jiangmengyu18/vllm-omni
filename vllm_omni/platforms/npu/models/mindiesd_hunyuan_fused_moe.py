@@ -18,6 +18,23 @@ def _group_is_enabled(group: Any | None) -> bool:
     return group is not None and dist.get_world_size(group) > 1
 
 
+def _is_mxfp8_weight(weight: torch.Tensor) -> bool:
+    mxfp8_dtypes = {getattr(torch, "float8_e4m3fn", None), getattr(torch_npu, "float8_e4m3fn", None)}
+    return weight.dtype in mxfp8_dtypes
+
+
+def _reshape_mxfp8_moe_scale(scale: torch.Tensor) -> torch.Tensor:
+    if scale.dim() == 4:
+        return scale.contiguous()
+    if scale.dim() != 3:
+        raise ValueError(f"MXFP8 MoE weight scale must be 3D or 4D, but got {scale.dim()}D.")
+
+    num_experts, out_features, group_count = scale.shape
+    if group_count % 2 != 0:
+        raise ValueError(f"MXFP8 MoE weight scale group dimension must be even, but got {group_count}.")
+    return scale.reshape(num_experts, out_features, group_count // 2, 2).transpose(1, 2).contiguous()
+
+
 class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
     """NPU adapter that executes HunyuanImage3 MoE with MindIE-SD."""
 
@@ -59,7 +76,6 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             return
 
         if self.w13_weight.dtype == torch.int8:
-            # --- Quantized path (e.g. --quantization ascend with W8A8_DYNAMIC) ---
             from mindiesd.quantization.config import QuantConfig
             from mindiesd.quantization.mode import QuantAlgorithm
 
@@ -72,8 +88,19 @@ class MindIESDHunyuanFusedMoE(HunyuanFusedMoEDefault):
             self.w2_weight.data = torch_npu.npu_format_cast(self.w2_weight.data, ACL_FORMAT_FRACTAL_NZ)
             self.w13_weight_scale.data = self.w13_weight_scale.data.reshape(self.w13_weight_scale.shape[0], -1)
             self.w2_weight_scale.data = self.w2_weight_scale.data.reshape(self.w2_weight_scale.shape[0], -1)
+        elif _is_mxfp8_weight(self.w13_weight):
+            from mindiesd.quantization.config import QuantConfig
+            from mindiesd.quantization.mode import QuantAlgorithm
+
+            self._mindiesd_quant_config = QuantConfig(quant_algo=QuantAlgorithm.W8A8_MXFP8)
+
+            # Keep MXFP8 MoE layout aligned with vllm-ascend: weights [E, K, N],
+            # scales [E, K_group / 2, N, 2].
+            self.w13_weight.data = self.w13_weight.data.transpose(1, 2).contiguous()
+            self.w2_weight.data = self.w2_weight.data.transpose(1, 2).contiguous()
+            self.w13_weight_scale.data = _reshape_mxfp8_moe_scale(self.w13_weight_scale.data)
+            self.w2_weight_scale.data = _reshape_mxfp8_moe_scale(self.w2_weight_scale.data)
         else:
-            # --- Unquantized path ---
             self._mindiesd_quant_config = None
             self.w13_weight.data = self.w13_weight.data.transpose(-1, -2).contiguous()
             self.w2_weight.data = self.w2_weight.data.transpose(-1, -2).contiguous()
