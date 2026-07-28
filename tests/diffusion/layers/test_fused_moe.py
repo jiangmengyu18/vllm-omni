@@ -99,32 +99,27 @@ class TestSetForwardContextDPMetadata:
 class TestFusedMoEFactory:
     """Test FusedMoE factory __new__ and mapping delegation."""
 
-    def test_new_returns_vllm_runner_and_registers_hooks(self, mocker, monkeypatch):
+    def test_new_returns_vllm_runner_and_registers_hooks(self, mocker):
         import vllm_omni.diffusion.layers.fused_moe as fused_moe
 
         mock_platform = mocker.MagicMock()
         mocker.patch.object(fused_moe, "current_omni_platform", mock_platform)
 
         mock_runner = mocker.MagicMock()
-        mock_vllm_fused_moe = mocker.MagicMock(return_value=mock_runner)
-        monkeypatch.setitem(
-            sys.modules,
-            "vllm.model_executor.layers.fused_moe",
-            SimpleNamespace(FusedMoE=mock_vllm_fused_moe),
-        )
+        mock_platform.build_diffusion_fused_moe_runner.return_value = mock_runner
 
         result = fused_moe.FusedMoE(prefix="test", a=1, reduce_results=True)
 
         assert result is mock_runner
         mock_platform.prepare_diffusion_op_runtime.assert_called_once_with("fused_moe")
-        mock_vllm_fused_moe.assert_called_once_with(prefix="test", a=1)
+        mock_platform.build_diffusion_fused_moe_runner.assert_called_once_with(prefix="test", a=1)
         mock_runner.register_forward_pre_hook.assert_called_once_with(
             mocker.ANY,
             with_kwargs=True,
         )
         mock_platform.register_additional_diffusion_fused_moe_hooks.assert_called_once_with(mock_runner)
 
-    def test_num_tokens_pre_hook_uses_kwargs_hidden_states(self, mocker, monkeypatch):
+    def test_num_tokens_pre_hook_uses_kwargs_hidden_states(self, mocker):
         import vllm_omni.diffusion.layers.fused_moe as fused_moe
 
         captured_hook = None
@@ -136,12 +131,9 @@ class TestFusedMoEFactory:
                 captured_hook = hook
 
         mock_runner = MockRunner()
-        monkeypatch.setitem(
-            sys.modules,
-            "vllm.model_executor.layers.fused_moe",
-            SimpleNamespace(FusedMoE=mocker.MagicMock(return_value=mock_runner)),
-        )
-        mocker.patch.object(fused_moe, "current_omni_platform", mocker.MagicMock())
+        mock_platform = mocker.MagicMock()
+        mock_platform.build_diffusion_fused_moe_runner.return_value = mock_runner
+        mocker.patch.object(fused_moe, "current_omni_platform", mock_platform)
         mock_set_num_tokens = mocker.patch.object(fused_moe, "_set_forward_context_num_tokens")
         mock_set_dp_metadata = mocker.patch.object(fused_moe, "_set_forward_context_dp_metadata")
 
@@ -154,7 +146,7 @@ class TestFusedMoEFactory:
         mock_set_num_tokens.assert_called_once_with(17)
         mock_set_dp_metadata.assert_called_once_with(17)
 
-    def test_num_tokens_pre_hook_uses_positional_hidden_states(self, mocker, monkeypatch):
+    def test_num_tokens_pre_hook_uses_positional_hidden_states(self, mocker):
         import vllm_omni.diffusion.layers.fused_moe as fused_moe
 
         captured_hook = None
@@ -166,12 +158,9 @@ class TestFusedMoEFactory:
                 captured_hook = hook
 
         mock_runner = MockRunner()
-        monkeypatch.setitem(
-            sys.modules,
-            "vllm.model_executor.layers.fused_moe",
-            SimpleNamespace(FusedMoE=mocker.MagicMock(return_value=mock_runner)),
-        )
-        mocker.patch.object(fused_moe, "current_omni_platform", mocker.MagicMock())
+        mock_platform = mocker.MagicMock()
+        mock_platform.build_diffusion_fused_moe_runner.return_value = mock_runner
+        mocker.patch.object(fused_moe, "current_omni_platform", mock_platform)
         mock_set_num_tokens = mocker.patch.object(fused_moe, "_set_forward_context_num_tokens")
         mock_set_dp_metadata = mocker.patch.object(fused_moe, "_set_forward_context_dp_metadata")
 

@@ -74,6 +74,12 @@ class OmniPlatform(Platform):
         return None
 
     @classmethod
+    def build_diffusion_fused_moe_runner(cls, *, prefix: str, **kwargs: Any) -> Any:
+        from vllm.model_executor.layers.fused_moe import FusedMoE as _FusedMoE
+
+        return _FusedMoE(prefix=prefix, **kwargs)
+
+    @classmethod
     def register_additional_diffusion_fused_moe_hooks(cls, moe_runner: Any) -> None:
         # One-shot lazy kernel initialisation on the first forward (no-op unless
         # the runner exposes an uninitialised quant_method). Mirrors the prior
