@@ -274,6 +274,17 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         torch.accelerator.synchronize()
 
     @classmethod
+    def record_device_event(cls) -> torch.Event | None:
+        """Record a device event on the default stream to mark tensor readiness."""
+        try:
+            event = torch.Event()
+            event.record()
+            return event
+        except Exception:
+            logger.warning("Failed to record device event for cross-stream sync")
+            return None
+
+    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.cuda.mem_get_info(device)
         return free
@@ -286,6 +297,16 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     @classmethod
     def get_device_name(cls, device_id: int = 0) -> str:
         return torch.cuda.get_device_name(device_id)
+
+    @classmethod
+    def get_device_total_memory(cls, device_id: int = 0) -> int:
+        device_props = torch.cuda.get_device_properties(device_id)
+        return device_props.total_memory
+
+    @classmethod
+    def is_fully_connected(cls, device_ids: list[int]) -> bool:
+        logger.debug("NVLink detection not available on CudaOmniPlatform; assuming no NVLink.")
+        return False
 
     @classmethod
     def get_default_ir_op_priority(cls, vllm_config: VllmConfig) -> IrOpPriorityConfig:

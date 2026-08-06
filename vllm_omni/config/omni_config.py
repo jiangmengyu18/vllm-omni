@@ -113,6 +113,7 @@ class _ParallelConfigEngineOverrides(TypedDict, total=False):
     ulysses_mode: str
     cfg_parallel_size: int
     vae_patch_parallel_size: int
+    text_encoder_tp_size: int
     use_hsdp: bool
     mask_sp_padding: bool
     hsdp_shard_size: int
@@ -257,6 +258,7 @@ class OmniStageModelConfig:
     """Per-stage model behavior."""
 
     active_stream_window: int = Field(default=0, ge=0)
+    duplex_max_sessions: int = Field(default=1, ge=1)
     enable_sleep_mode: bool = False
     default_sampling_params: dict[str, Any] | None = None
     subtalker_sampling_params: dict[str, Any] | None = None
@@ -270,6 +272,11 @@ class OmniStageModelConfig:
     enable_multithread_weight_load: bool = True
     num_weight_load_threads: int = Field(default=4, ge=1)
     disable_autocast: bool = False
+    # Per-stage checkpoint/tokenizer subdirectories under the model root
+    # (e.g. Audex stage 0 → checkpoint_folder_audiogen). Mirrors
+    # StagePipelineConfig.model_subdir/tokenizer_subdir on the legacy path.
+    model_subdir: str | None = None
+    tokenizer_subdir: str | None = None
 
 
 @config
@@ -363,8 +370,9 @@ class OmniStageDiffusionParallelConfig(OmniStageParallelConfig):
     ring_degree: int = Field(default=1, ge=1)
     allgather_degree: int = Field(default=1, ge=1)
     ulysses_mode: str = "strict"
-    cfg_parallel_size: int = Field(default=1, ge=1, le=3)
+    cfg_parallel_size: int = Field(default=1, ge=1)
     vae_patch_parallel_size: int = Field(default=1, ge=1)
+    text_encoder_tp_size: int = Field(default=1, ge=1)
     vae_parallel_mode: str = "tile"
     use_hsdp: bool = False
     mask_sp_padding: bool = False
@@ -469,6 +477,9 @@ class _DiffusionConfigProjection:
     output_type: str = "pil"
     enable_cpu_offload: bool = False
     enable_layerwise_offload: bool = False
+    enable_distributed_layerwise_offload: bool = False
+    dlo_use_allgather: bool = True
+    dlo_resident_layers: int = Field(default=0, ge=0)
     pin_cpu_memory: bool = True
     diffusion_compile_granularity: Literal["regional", "full"] = "regional"
     diffusion_compile_dynamic: bool = Field(default=True, strict=True)
@@ -959,7 +970,12 @@ def _build_common_stage_config_kwargs(
     return (
         {
             "stage_pipeline_config": topology,
-            "model_config": _build_model_config(topology, stage_deploy, engine.model),
+            "model_config": _build_model_config(
+                topology,
+                stage_deploy,
+                engine.model,
+                duplex_max_sessions=(deploy.duplex_session.max_sessions if deploy.session_mode == "duplex" else 1),
+            ),
             "load_config": _build_load_config(engine.load),
             "cache_config": _build_cache_config(deploy, engine.cache),
             "scheduler_config": _build_scheduler_config(deploy, engine.scheduler),
@@ -1112,13 +1128,20 @@ def _build_model_config(
     topology: StagePipelineConfig,
     stage_deploy: StageDeployConfig | None,
     engine: _ModelEngineOverrides,
+    *,
+    duplex_max_sessions: int,
 ) -> OmniStageModelConfig:
     default_sampling_params = _stage_sampling_params(stage_deploy, topology)
     kwargs = _config_kwargs(engine)
     if "has_sampling_extra_args" not in kwargs:
         kwargs["has_sampling_extra_args"] = bool((default_sampling_params or {}).get("extra_args"))
+    if "model_subdir" not in kwargs and topology.model_subdir is not None:
+        kwargs["model_subdir"] = topology.model_subdir
+    if "tokenizer_subdir" not in kwargs and topology.tokenizer_subdir is not None:
+        kwargs["tokenizer_subdir"] = topology.tokenizer_subdir
     return OmniStageModelConfig(
         default_sampling_params=default_sampling_params,
+        duplex_max_sessions=duplex_max_sessions,
         **kwargs,
     )
 
