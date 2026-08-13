@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import vllm.distributed.parallel_state as vllm_parallel_state
 import vllm.forward_context as _vllm_fc
 from vllm.config import VllmConfig
+from vllm.model_executor.layers.fused_moe.runner.shared_experts import SharedExpertsOrder
 from vllm.distributed import get_dp_group, get_ep_group
 from vllm.distributed.parallel_state import (
     get_tp_group,
@@ -244,7 +245,8 @@ class MindIESDAscendMoERunner(AscendMoERunner):
                 dist.all_reduce(routed_out, group=self._tp_group)
             return routed_out
 
-        shared_out = self._shared_experts(hidden_states)
+        self._shared_experts(hidden_states, SharedExpertsOrder.NO_OVERLAP)
+        shared_out = self._shared_experts.output
         if reduce_merged:
             output = routed_out + shared_out
             dist.all_reduce(output, group=self._tp_group)
@@ -266,7 +268,7 @@ class MindIESDAscendMoERunner(AscendMoERunner):
             "hidden_states": moe_hidden_states,
             "router_logits": moe_router_logits,
             "num_experts": self.moe_config.num_experts,
-            "top_k": self.top_k,
+            "top_k": routed_experts.top_k,
             "w13_weight": routed_experts.w13_weight,
             "w2_weight": routed_experts.w2_weight,
             "w13_bias": getattr(routed_experts, "w13_bias", None),
@@ -275,8 +277,8 @@ class MindIESDAscendMoERunner(AscendMoERunner):
             "tp_group": self._tp_group,
             "ep_group": self._ep_group,
             "dispatcher_type": None,
-            "renormalize": self.renormalize,
-            "custom_routing_function": self.custom_routing_function,
+            "renormalize": routed_experts.renormalize,
+            "custom_routing_function": routed_experts.custom_routing_function,
             "inputs_sharded": self._inputs_sharded,
             "reduce_routed_out": not self._can_reduce_merged_output,
             "return_dispatcher_type": True,
