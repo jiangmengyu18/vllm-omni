@@ -97,6 +97,16 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         prepare_fused_moe_runtime()
 
     @classmethod
+    def build_diffusion_fused_moe_runner(cls, *, prefix: str, **kwargs: Any) -> Any:
+        from importlib.util import find_spec
+
+        if find_spec("mindiesd") is not None:
+            from vllm_omni.platforms.npu.layers.fused_moe import MindIESDAscendMoERunner
+
+            kwargs["runner_cls"] = MindIESDAscendMoERunner
+        return super().build_diffusion_fused_moe_runner(prefix=prefix, **kwargs)
+
+    @classmethod
     def register_additional_diffusion_fused_moe_hooks(cls, moe_runner: Any) -> None:
         from vllm_omni.platforms.npu.layers.fused_moe import fused_moe_forward_context_pre_hook
 

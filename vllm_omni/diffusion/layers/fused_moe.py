@@ -75,9 +75,7 @@ class FusedMoE:
         # Current vLLM FusedMoE handles output reduction internally.
         kwargs.pop("reduce_results", None)
         # FusedMoE is now a factory function; call it to get a MoERunner.
-        from vllm.model_executor.layers.fused_moe import FusedMoE as _FusedMoE
-
-        moe_runner = _FusedMoE(prefix=prefix, **kwargs)
+        moe_runner = current_omni_platform.build_diffusion_fused_moe_runner(prefix=prefix, **kwargs)
 
         # Set ForwardContext.num_tokens before each forward. After the rebase to
         # vLLM 0.18.0 FusedMoE requires this; without it MoE routing is silently
