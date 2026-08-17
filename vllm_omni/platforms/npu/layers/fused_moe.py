@@ -16,6 +16,10 @@ from vllm.distributed.parallel_state import (
 from vllm.distributed.parallel_state import (
     init_model_parallel_group as vllm_init_model_parallel_group,
 )
+from vllm.model_executor.layers.fused_moe.runner.shared_experts import (
+    SharedExperts,
+    SharedExpertsOrder,
+)
 from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.ops.fused_moe.fused_moe import AscendMoERunner
 from vllm_ascend.ops.fused_moe.moe_comm_method import _MoECommMethods
@@ -244,7 +248,13 @@ class MindIESDAscendMoERunner(AscendMoERunner):
                 dist.all_reduce(routed_out, group=self._tp_group)
             return routed_out
 
-        shared_out = self._shared_experts(hidden_states)
+        # vLLM-Ascend main wraps shared experts with vLLM's SharedExperts,
+        # while the v0.26 release passes the underlying module directly.
+        if isinstance(self._shared_experts, SharedExperts):
+            self._shared_experts(hidden_states, SharedExpertsOrder.NO_OVERLAP)
+            shared_out = self._shared_experts.output
+        else:
+            shared_out = self._shared_experts(hidden_states)
         if reduce_merged:
             output = routed_out + shared_out
             dist.all_reduce(output, group=self._tp_group)
