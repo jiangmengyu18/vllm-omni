@@ -82,3 +82,18 @@ class SwiGLU7(CustomOp):
 
     # Platforms without a Triton implementation still have the native formula.
     forward_npu = forward_native
+
+
+_swiglu7_op = SwiGLU7()
+
+
+def swiglu7(
+    x: torch.Tensor,
+    alpha: float = 1.702,
+    limit: float = 7.0,
+    out_dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Use platform dispatch eagerly and native pointwise math while compiling."""
+    if not torch.compiler.is_compiling():
+        return _swiglu7_op(x, alpha, limit, out_dtype)
+    return _swiglu7_op.forward_native(x, alpha, limit, out_dtype)

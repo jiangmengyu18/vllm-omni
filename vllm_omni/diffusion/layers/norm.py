@@ -15,6 +15,35 @@ logger = init_logger(__name__)
 _HAS_MINDIESD = find_spec("mindiesd") is not None
 
 
+def rms_norm_native(
+    x: torch.Tensor,
+    weight: torch.Tensor | None = None,
+    eps: float = 1e-6,
+    *,
+    dim: int | tuple[int, ...] = -1,
+    out_dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Normalize in FP32, optionally scale, then cast to the requested dtype."""
+    input_dtype = x.dtype
+    x = x.to(torch.float32)
+    variance = x.pow(2).mean(dim, keepdim=True)
+    out = x * torch.rsqrt(variance + eps)
+    if weight is not None:
+        out = weight.to(torch.float32) * out
+    return out.to(input_dtype if out_dtype is None else out_dtype)
+
+
+def rms_norm_npu(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Apply Ascend RMSNorm without changing input or gamma storage dtype."""
+    import torch_npu
+
+    return torch_npu.npu_rms_norm(x, gamma=weight, epsilon=eps)[0]
+
+
 class LayerNorm(nn.LayerNorm, CustomOp):
     """
     LayerNorm implementation that inherits from both ``nn.LayerNorm`` and ``CustomOp``.
@@ -133,9 +162,7 @@ class RMSNorm(CustomOp):
             )
             return output, updated_residual
 
-        output = torch_npu.npu_rms_norm(x, gamma=self.weight, epsilon=self.variance_epsilon)[0]
-
-        return output
+        return rms_norm_npu(x, self.weight, self.variance_epsilon)
 
     def forward_native(
         self,
@@ -145,10 +172,5 @@ class RMSNorm(CustomOp):
         if residual is not None:
             residual = residual + x
             x = residual
-        input_dtype = x.dtype
-        x = x.to(torch.float32)
-        variance = x.pow(2).mean(-1, keepdim=True)
-        out = x * torch.rsqrt(variance + self.variance_epsilon)
-        out = self.weight.to(torch.float32) * out
-        out = out.to(input_dtype)
+        out = rms_norm_native(x, self.weight, self.variance_epsilon)
         return (out, residual) if residual is not None else out

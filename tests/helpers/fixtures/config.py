@@ -35,7 +35,7 @@ def default_env():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def default_vllm_config():
+def default_vllm_config(default_env):
     """Set a default VllmConfig for the whole test session.
 
     Session scope ensures module-scoped fixtures (e.g. ``omni_runner``) and
@@ -44,7 +44,9 @@ def default_vllm_config():
     desynchronize vLLM init vs request preprocessing (e.g. renderer state).
     """
     # Use CPU device if no GPU is available (e.g., in CI environments)
-    if torch.cuda.is_available() and torch.accelerator.device_count() > 0:
+    if os.environ.get("VLLM_TARGET_DEVICE") == "cpu":
+        device = "cpu"
+    elif torch.cuda.is_available() and torch.accelerator.device_count() > 0:
         device = "cuda"
     elif hasattr(torch, "npu") and torch.npu.is_available():
         device = "npu"
