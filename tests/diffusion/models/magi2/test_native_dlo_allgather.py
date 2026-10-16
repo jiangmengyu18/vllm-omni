@@ -17,7 +17,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 from safetensors.torch import load_file, save_file
 
-import vllm_omni.diffusion.models.magi2.layers.native.linear as linear_module
+import vllm_omni.diffusion.models.magi2.common_layers as linear_module
 import vllm_omni.diffusion.models.magi2.layers.native.mh_moe as mh_moe_module
 from vllm_omni.diffusion.model_loader.host_weight_plan import (
     build_checkpoint_mmap_plan,

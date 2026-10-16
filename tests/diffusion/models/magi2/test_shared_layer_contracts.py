@@ -10,13 +10,53 @@ import pytest
 import torch
 
 from tests.helpers.mark import hardware_test
+from vllm_omni.diffusion.models.magi2.common_layers import MultiModalityRMSNorm
 from vllm_omni.diffusion.models.magi2.layers.native import ModalityDispatcher
-from vllm_omni.diffusion.models.magi2.layers.native.normalization import MultiModalityRMSNorm
 from vllm_omni.diffusion.models.magi2.layers.native.rope import apply_rotary_emb
 from vllm_omni.diffusion.models.magi2.layers.npu import rope as npu_rope
 from vllm_omni.diffusion.models.magi2.layers.npu.normalization import MultiModalityRMSNorm as NPUMultiModalityRMSNorm
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.core_model]
+
+
+@pytest.mark.cpu
+@pytest.mark.parametrize("device", ["cpu", "cuda", "musa", "npu"])
+def test_hardware_dispatch_retains_native_defaults(monkeypatch: pytest.MonkeyPatch, mocker, device: str) -> None:
+    """Select Python interfaces only; no hardware operators or model weights run."""
+    from vllm_omni import platforms
+    from vllm_omni.diffusion.models.magi2 import common_layers, layers
+    from vllm_omni.diffusion.models.magi2.layers import cuda, musa, native, npu
+    from vllm_omni.platforms.interface import OmniPlatform
+
+    # Load all leaves before changing the selector so their platform references
+    # and CustomOp instances cannot leak a test-only platform into later tests.
+    backends = {"cpu": native, "cuda": cuda, "musa": musa, "npu": npu}
+    platform = mocker.Mock(spec=OmniPlatform)
+    platform.is_cuda.return_value = device == "cuda"
+    platform.is_musa.return_value = device == "musa"
+    platform.is_npu.return_value = device == "npu"
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(platforms, "current_omni_platform", platform)
+            importlib.reload(layers)
+            assert layers.ModalityDispatcher is common_layers.ModalityDispatcher
+            assert layers.Magi2GroupedLinear is common_layers.Magi2GroupedLinear
+            assert layers.ElementWiseFourierEmbed is common_layers.ElementWiseFourierEmbed
+            assert layers.swiglu7 is common_layers.swiglu7
+            assert layers.Magi2MultiHeadMoE is backends[device].Magi2MultiHeadMoE
+            assert layers.varlen_attention_with_sink is backends[device].varlen_attention_with_sink
+            norm = npu.MultiModalityRMSNorm if device == "npu" else native.MultiModalityRMSNorm
+            rope = npu.apply_rotary_emb if device == "npu" else native.apply_rotary_emb
+            mhc = musa.MHCHandler if device == "musa" else native.MHCHandler
+            assert layers.MultiModalityRMSNorm is norm
+            assert layers.apply_rotary_emb is rope
+            assert layers.MHCHandler is mhc
+            handler = layers.MHCHandler(4, 64, sinkhorn_iterations=3, sinkhorn_epsilon=1e-8, dtype=torch.bfloat16)
+            assert handler.fp32_stream_contractions == (device == "musa")
+            assert handler.sinkhorn_iterations == 3 and handler.sinkhorn_epsilon == 1e-8
+            assert handler.dtype == torch.bfloat16
+    finally:
+        importlib.reload(layers)
 
 
 def _rms_reference(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:

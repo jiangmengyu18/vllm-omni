@@ -35,7 +35,7 @@ if current_omni_platform.is_cuda():
         varlen_attention_with_sink,
     )
 elif current_omni_platform.is_musa():
-    from .musa import Magi2MultiHeadMoE, varlen_attention_with_sink
+    from .musa import Magi2MultiHeadMoE, MHCHandler, varlen_attention_with_sink
 elif current_omni_platform.is_npu():
     from .npu import Magi2MultiHeadMoE, MultiModalityRMSNorm, apply_rotary_emb, varlen_attention_with_sink
 

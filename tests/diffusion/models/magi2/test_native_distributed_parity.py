@@ -14,7 +14,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 import vllm_omni.diffusion.models.magi2.attention as attention_module
-import vllm_omni.diffusion.models.magi2.layers.native.linear as linear_module
+import vllm_omni.diffusion.models.magi2.common_layers as linear_module
 import vllm_omni.diffusion.models.magi2.layers.native.mh_moe as mh_moe_module
 import vllm_omni.diffusion.models.magi2.parallel as parallel_module
 from vllm_omni.diffusion.models.magi2.attention import VarlenHandler

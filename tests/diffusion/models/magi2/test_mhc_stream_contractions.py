@@ -10,8 +10,9 @@ import torch
 
 from tests.helpers.mark import hardware_test
 from vllm_omni.diffusion.layers.mhc import MHCMix
+from vllm_omni.diffusion.models.magi2 import common_layers as mhc_module
 from vllm_omni.diffusion.models.magi2 import layers
-from vllm_omni.diffusion.models.magi2.layers.native import mhc as mhc_module
+from vllm_omni.diffusion.models.magi2.layers.musa.mhc import MHCHandler as MUSAMHCHandler
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.core_model]
 
@@ -30,8 +31,8 @@ U32 = 2.0**-24
 
 
 def _handler(monkeypatch, musa):
-    monkeypatch.setattr(layers.current_omni_platform, "is_musa", lambda: musa)
-    return layers.MHCHandler(STREAMS, HIDDEN)
+    handler = MUSAMHCHandler if musa else mhc_module.MHCHandler
+    return handler(STREAMS, HIDDEN)
 
 
 def _pre_inputs(dtype, tokens=37, seed=5):
@@ -131,8 +132,7 @@ def test_musa_apply_pre_is_an_fp32_contraction(monkeypatch, dtype):
 @pytest.mark.cpu
 @pytest.mark.parametrize("case", ["float64", "mixed_dtype", "broadcast_tokens", "single_stream", "extra_rank"])
 def test_musa_apply_pre_keeps_the_einsum_contract_elsewhere(monkeypatch, case):
-    monkeypatch.setattr(layers.current_omni_platform, "is_musa", lambda: True)
-    handler = layers.MHCHandler(1 if case == "single_stream" else STREAMS, HIDDEN)
+    handler = MUSAMHCHandler(1 if case == "single_stream" else STREAMS, HIDDEN)
     streams, (alpha, bias, logits) = _pre_inputs(torch.float64 if case == "float64" else torch.float32)
     if case == "single_stream":
         streams, bias, logits = streams[:, :1], bias[:1], logits[:, :1]

@@ -2,19 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 # Copyright (c) 2026 SandAI. All Rights Reserved.
 
-"""Checkpoint-compatible MAGI-2 rotary layout."""
+"""MAGI-2 rotary validation over the shared portable implementation."""
 
 from __future__ import annotations
 
 import torch
 
-
-def rotate_half(x: torch.Tensor, interleaved: bool = False) -> torch.Tensor:
-    if not interleaved:
-        x1, x2 = x.chunk(2, dim=-1)
-        return torch.cat((-x2, x1), dim=-1)
-    x1, x2 = x[..., ::2], x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+from vllm_omni.diffusion.layers.rope import apply_rotary_emb_torch
+from vllm_omni.diffusion.layers.rope import rotate_half as rotate_half
 
 
 def apply_rotary_emb(
@@ -24,16 +19,9 @@ def apply_rotary_emb(
     *,
     interleaved: bool = False,
 ) -> torch.Tensor:
-    """Apply the released element-wise RoPE layout to ``[...,H,D]``."""
+    """Apply shared RoPE while preserving MAGI-2's invalid-dimension error."""
 
     rotary_dim = cos.shape[-1] * 2
     if rotary_dim > x.shape[-1]:
         raise ValueError(f"RoPE dimension {rotary_dim} exceeds head dimension {x.shape[-1]}")
-    if interleaved:
-        cos = cos.unsqueeze(-2).repeat_interleave(2, dim=-1)
-        sin = sin.unsqueeze(-2).repeat_interleave(2, dim=-1)
-    else:
-        cos = torch.cat((cos, cos), dim=-1).unsqueeze(-2)
-        sin = torch.cat((sin, sin), dim=-1).unsqueeze(-2)
-    rotated = x[..., :rotary_dim] * cos + rotate_half(x[..., :rotary_dim], interleaved) * sin
-    return torch.cat((rotated, x[..., rotary_dim:]), dim=-1)
+    return apply_rotary_emb_torch(x, cos, sin, interleaved=interleaved)

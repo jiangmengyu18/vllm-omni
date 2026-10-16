@@ -9,7 +9,7 @@ import os
 
 import torch
 
-from ..native.normalization import MultiModalityRMSNorm as NativeMultiModalityRMSNorm
+from ...common_layers import MultiModalityRMSNorm as NativeMultiModalityRMSNorm
 
 _USE_NPU_RMS_NORM = os.environ.get("MAGI2_USE_NPU_RMS_NORM", "1") != "0"
 
