@@ -139,6 +139,8 @@ class Magi2MultiHeadMoEConfig:
 class Magi2MultiHeadMoE(nn.Module):
     """Checkpoint-compatible head-routed experts with a pure-Torch fallback."""
 
+    _compute_topk_probs_and_indices = staticmethod(compute_topk_probs_and_indices)
+
     _EP_SHARDED_PARAMETER_NAMES = frozenset(
         {"gate", "W_gate", "W_up", "W_down", "router.expert_bias", "router.expert_bias_ema"}
     )
@@ -232,7 +234,7 @@ class Magi2MultiHeadMoE(nn.Module):
         bias_source = (os.environ.get("MAGI2_ROUTER_BIAS_SOURCE") or "ema").strip().lower()
         bias_tensor = self.router.expert_bias if bias_source == "main" else self.router.expert_bias_ema
         bias = bias_tensor.view(self.local_num_heads, self.num_experts)
-        probs, indices = compute_topk_probs_and_indices(
+        probs, indices = self._compute_topk_probs_and_indices(
             logits,
             self.top_k,
             score_func=self.config.score_func,

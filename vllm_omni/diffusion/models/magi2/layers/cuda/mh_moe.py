@@ -10,7 +10,6 @@ import math
 import os
 
 import torch
-import torch.nn.functional as F
 from vllm.triton_utils import HAS_TRITON, tl, triton
 
 from vllm_omni.platforms import current_omni_platform
@@ -18,12 +17,14 @@ from vllm_omni.platforms import current_omni_platform
 from ...fused_moe_kernels import (
     global_sort_routes,
     invoke_fused_moe_bf16,
-    torch_mh_moe_forward,
     triton_mh_moe_forward,
 )
 from ...parallel import Magi2ParallelGroup
 from ..native.mh_moe import Magi2MultiHeadMoE as NativeMagi2MultiHeadMoE
-from ..native.mh_moe import Magi2MultiHeadMoEConfig, RoutingScore
+from ..native.mh_moe import Magi2MultiHeadMoEConfig, RoutingScore, torch_mh_moe_forward
+from ..native.mh_moe import (
+    compute_topk_probs_and_indices as _reference_topk_probs_and_indices,
+)
 
 try:  # Triton's precise exp; ``tl.exp`` lowers to the 29-ULP ex2 approximation.
     from triton.language.extra import libdevice as _tl_libdevice
@@ -33,36 +34,6 @@ except ImportError:  # pragma: no cover - non-CUDA Triton builds
 _HAS_PRECISE_EXP = _tl_libdevice is not None and hasattr(_tl_libdevice, "exp")
 
 _BF16_MOE_CUDA_MIN_TOKENS = 4096
-
-
-def _reference_topk_probs_and_indices(
-    router_logits: torch.Tensor,
-    top_k: int,
-    *,
-    score_func: RoutingScore = "sigmoid",
-    expert_bias: torch.Tensor | None = None,
-    route_norm: bool = True,
-    norm_eps: float = 1e-12,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Unfused reference routing.  Also the oracle the fused path is tested against."""
-
-    if score_func == "sigmoid":
-        router_scores = torch.sigmoid(router_logits)
-    elif score_func == "softmax":
-        router_scores = torch.softmax(router_logits, dim=-1)
-    else:
-        raise ValueError(f"unsupported routing score function {score_func!r}")
-    selection_scores = router_scores
-    if expert_bias is not None:
-        selection_scores = selection_scores + expert_bias.view(router_logits.shape[0], 1, -1)
-    # Keep the reference's default sorted=True behavior.  Besides defining the
-    # route order for ties, this also fixes the reduction order used by the
-    # following L1 normalization.
-    topk_indices = torch.topk(selection_scores, top_k, dim=-1).indices
-    topk_probs = router_scores.gather(-1, topk_indices)
-    if route_norm:
-        topk_probs = F.normalize(topk_probs, p=1, dim=-1, eps=norm_eps)
-    return topk_probs, topk_indices
 
 
 # Selection-score bounds: the finite fp32 range, so that -inf is reserved for
@@ -451,6 +422,8 @@ def _bf16_fused_moe_forward(
 class Magi2MultiHeadMoE(NativeMagi2MultiHeadMoE):
     """CUDA/MUSA MAGI-2 experts with the upstream fused BF16 and Triton paths."""
 
+    _compute_topk_probs_and_indices = staticmethod(compute_topk_probs_and_indices)
+
     def __init__(
         self,
         config: Magi2MultiHeadMoEConfig,
@@ -604,21 +577,6 @@ class Magi2MultiHeadMoE(NativeMagi2MultiHeadMoE):
             buffers = _allocate_bf16_route_buffers(route_count, self.local_flatten_num_experts, 128, device)
             self._bf16_route_buffers = buffers
         return buffers
-
-    def _route(self, x_heads: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        gate = self.gate.view(self.local_num_heads, self.num_experts, self.d_head).float()
-        logits = torch.einsum("shd,hed->hse", x_heads.float(), gate)
-        bias_source = (os.environ.get("MAGI2_ROUTER_BIAS_SOURCE") or "ema").strip().lower()
-        bias_tensor = self.router.expert_bias if bias_source == "main" else self.router.expert_bias_ema
-        bias = bias_tensor.view(self.local_num_heads, self.num_experts)
-        probs, indices = compute_topk_probs_and_indices(
-            logits,
-            self.top_k,
-            score_func=self.config.score_func,
-            expert_bias=bias,
-            route_norm=self.config.route_norm,
-        )
-        return probs * self.config.route_scale, indices
 
     def _local_forward(self, x_heads: torch.Tensor) -> torch.Tensor:
         probabilities, indices = self._route(x_heads)

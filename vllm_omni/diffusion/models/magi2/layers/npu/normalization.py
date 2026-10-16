@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
-"""Ascend RMSNorm implementation for MAGI-2."""
+"""NPU RMSNorm operator override for MAGI-2."""
 
 from __future__ import annotations
 
@@ -9,9 +9,6 @@ import os
 
 import torch
 
-from vllm_omni.diffusion.layers.norm import rms_norm_npu
-
-from ..native.dispatcher import ModalityDispatcher
 from ..native.normalization import MultiModalityRMSNorm as NativeMultiModalityRMSNorm
 
 _USE_NPU_RMS_NORM = os.environ.get("MAGI2_USE_NPU_RMS_NORM", "1") != "0"
@@ -20,10 +17,11 @@ _USE_NPU_RMS_NORM = os.environ.get("MAGI2_USE_NPU_RMS_NORM", "1") != "0"
 class MultiModalityRMSNorm(NativeMultiModalityRMSNorm):
     """Use ``torch_npu.npu_rms_norm`` when its MAGI-2 contract is supported."""
 
-    def forward(
+    def _normalize(
         self,
         tensor: torch.Tensor,
-        modality_dispatcher: ModalityDispatcher | None = None,
+        weight: torch.Tensor,
+        reduce_dims: int | tuple[int, ...],
     ) -> torch.Tensor:
         if (
             not _USE_NPU_RMS_NORM
@@ -31,23 +29,17 @@ class MultiModalityRMSNorm(NativeMultiModalityRMSNorm):
             or self.num_patterns != 1
             or tensor.shape[-1] != self.dim
         ):
-            return super().forward(tensor, modality_dispatcher)
+            return super()._normalize(tensor, weight, reduce_dims)
+        if self.num_modality > 1 and tensor.shape[0] == 0:
+            return tensor.float()
 
-        original_dtype = tensor.dtype
-        compute = tensor.float()
-        weights = (self.weight.view(self.num_modality, self.dim) + 1.0).to(compute.dtype)
-        if self.num_modality == 1:
-            result = rms_norm_npu(compute, weights[0], self.eps)
-        else:
-            if modality_dispatcher is None:
-                raise ValueError("modality_dispatcher is required for multimodal RMSNorm")
-            inputs = modality_dispatcher.dispatch(compute)
-            outputs = [
-                part if part.shape[0] == 0 else rms_norm_npu(part, weights[index], self.eps)
-                for index, part in enumerate(inputs)
-            ]
-            result = modality_dispatcher.undispatch(*outputs)
-        return result.to(self.out_dtype or original_dtype)
+        import torch_npu
+
+        return torch_npu.npu_rms_norm(
+            tensor.float(),
+            gamma=weight.reshape(self.dim).to(torch.float32),
+            epsilon=self.eps,
+        )[0]
 
 
 __all__ = ["MultiModalityRMSNorm"]

@@ -9,8 +9,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from vllm_omni.diffusion.layers.norm import rms_norm_native
-
 from .dispatcher import ModalityDispatcher
 
 
@@ -47,19 +45,29 @@ class MultiModalityRMSNorm(nn.Module):
             raise ValueError(f"cannot normalize a {tuple(tensor.shape)} tensor over {self.dim} features")
         feature_shape = tuple(tensor.shape[-2:]) if split else (self.num_patterns, self.dim)
         reduce_dims = (-2, -1) if split else -1
-        normalized = rms_norm_native(tensor, eps=self.eps, dim=reduce_dims, out_dtype=torch.float32)
         if self.num_modality == 1:
             weight = self.weight.view(feature_shape) + 1.0
-            result = normalized * weight
+            result = self._normalize(tensor, weight, reduce_dims)
         else:
             if modality_dispatcher is None:
                 raise ValueError("modality_dispatcher is required for multimodal RMSNorm")
-            inputs = modality_dispatcher.dispatch(normalized)
+            inputs = modality_dispatcher.dispatch(tensor)
             weights = self.weight.view(self.num_modality, *feature_shape)
             result = modality_dispatcher.undispatch(
-                *(part * (weights[index] + 1.0) for index, part in enumerate(inputs))
+                *(self._normalize(part, weights[index] + 1.0, reduce_dims) for index, part in enumerate(inputs))
             )
         return result.to(self.out_dtype or original_dtype)
+
+    def _normalize(
+        self,
+        tensor: torch.Tensor,
+        weight: torch.Tensor,
+        reduce_dims: int | tuple[int, ...],
+    ) -> torch.Tensor:
+        """Apply the portable expression before the caller casts the output."""
+        normalized = tensor.float()
+        normalized = normalized * torch.rsqrt(normalized.square().mean(dim=reduce_dims, keepdim=True) + self.eps)
+        return normalized * weight
 
 
 __all__ = ["MultiModalityRMSNorm"]

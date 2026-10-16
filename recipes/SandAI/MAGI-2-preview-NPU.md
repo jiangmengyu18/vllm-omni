@@ -1,4 +1,4 @@
-# MAGI-2 Preview — Ascend 950
+# MAGI-2 Preview — NPU
 
 ## Summary
 
@@ -6,7 +6,7 @@
 - Model: `sand-ai/MAGI-2-preview`
 - Runtime: Native vLLM-Omni `Magi2Pipeline`; no SandAI runtime import
 - Task and mode: Online text-to-video-and-audio (T2VA)
-- Hardware: Four Ascend 950PR (A5) devices, 112 GiB per device
+- Hardware: Four NPU devices, 112 GiB per device
 - Deployment: Resident BF16, TP1/SP4 (Ulysses), eager execution
 - Maintainer: Community
 
@@ -62,7 +62,7 @@ mkdir -p "$OUTPUT_DIR"
 
 | Item | Value |
 | --- | --- |
-| Accelerator | Ascend 950PR (A5) |
+| Accelerator | NPU |
 | Per-device memory | 112 GiB |
 | Device count | 4 |
 | Device interconnect | Not recorded; no interconnect-specific performance claim |
@@ -154,7 +154,7 @@ establish visual accuracy or prove that all denoising steps ran.
 
 ## Supported features and qualification boundary
 
-| Feature | Ascend profile in this recipe | Guide |
+| Feature | NPU profile in this recipe | Guide |
 | --- | --- | --- |
 | Online T2VA | 272p, 100 steps, one request | [Video examples](../../examples/online_serving/text_to_video/README.md) |
 | Ulysses sequence parallel | Four-device resident SP4 with TP1 | [Sequence parallel](../../docs/user_guide/diffusion/parallelism/sequence_parallel.md) |
@@ -165,9 +165,9 @@ establish visual accuracy or prove that all denoising steps ran.
 
 ## Qualification evidence
 
-The PR records the matching-head test commands, results, and the generated
-video for the workload above. Historical test counts or timings are not
-substituted for the rebuilt branch's results. No peak-HBM, peak-host-PSS,
+Record the tested revision, commands, results, and generated video for the
+workload above. Do not substitute historical test counts or timings for a
+changed revision's results. No peak-HBM, peak-host-PSS,
 steady-state performance, or GPU-runtime claim is made by this NPU recipe.
 Generated output is a functional example, not an independent ground-truth
 reference. Unqualified profiles remain outside this recipe's support claim.

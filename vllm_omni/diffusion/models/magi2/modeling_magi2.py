@@ -23,7 +23,6 @@ import torch.nn as nn
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.layers.swiglu7 import swiglu7
 
 from .attention import Magi2PackedAttentionKernel, VarlenHandler
 from .configuration_magi2 import Magi2PreviewConfig
@@ -37,6 +36,7 @@ from .layers import (
     MultiModalityRMSNorm,
     apply_rotary_emb,
     make_grouped_linear,
+    swiglu7,
 )
 from .parallel import Magi2SequenceDispatcher
 

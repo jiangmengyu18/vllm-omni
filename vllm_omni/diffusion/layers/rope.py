@@ -29,8 +29,7 @@ def apply_rotary_emb_torch(x, cos, sin, interleaved=False):
     cos, sin: (seqlen, rotary_dim / 2) or (batch_size, seqlen, rotary_dim / 2)
     """
     ro_dim = cos.shape[-1] * 2
-    if ro_dim > x.shape[-1]:
-        raise ValueError(f"RoPE dimension {ro_dim} exceeds head dimension {x.shape[-1]}")
+    assert ro_dim <= x.shape[-1]
     cos = repeat(cos, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
     sin = repeat(sin, "... d -> ... 1 (2 d)" if not interleaved else "... d -> ... 1 (d 2)")
     return torch.cat(
@@ -40,36 +39,6 @@ def apply_rotary_emb_torch(x, cos, sin, interleaved=False):
         ],
         dim=-1,
     )
-
-
-def apply_rotary_emb_npu(
-    x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-    interleaved: bool = False,
-) -> torch.Tensor:
-    """Ascend half-layout RoPE, preserving batch-specific angles and tail dims."""
-    if x.device.type != "npu" or x.ndim != 4 or interleaved:
-        return apply_rotary_emb_torch(x, cos, sin, interleaved=interleaved)
-
-    import torch_npu
-
-    rotary_dim = cos.shape[-1] * 2
-    if rotary_dim > x.shape[-1]:
-        raise ValueError(f"RoPE dimension {rotary_dim} exceeds head dimension {x.shape[-1]}")
-    rotary_input = x[..., :rotary_dim]
-    cos = torch.cat((cos, cos), dim=-1).unsqueeze(-2).to(rotary_input.dtype)
-    sin = torch.cat((sin, sin), dim=-1).unsqueeze(-2).to(rotary_input.dtype)
-    while cos.ndim < x.ndim:
-        cos = cos.unsqueeze(0)
-        sin = sin.unsqueeze(0)
-    rotated = torch_npu.npu_rotary_mul(
-        rotary_input.contiguous(),
-        cos.contiguous(),
-        sin.contiguous(),
-        rotary_mode="half",
-    )
-    return torch.cat((rotated, x[..., rotary_dim:]), dim=-1)
 
 
 def apply_rotary_emb_mindiesd(
