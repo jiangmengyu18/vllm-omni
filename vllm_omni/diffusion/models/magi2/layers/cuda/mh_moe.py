@@ -21,9 +21,11 @@ from ...fused_moe_kernels import (
 )
 from ...parallel import Magi2ParallelGroup
 from ..native.mh_moe import Magi2MultiHeadMoE as NativeMagi2MultiHeadMoE
-from ..native.mh_moe import Magi2MultiHeadMoEConfig, RoutingScore, torch_mh_moe_forward
 from ..native.mh_moe import (
-    compute_topk_probs_and_indices as _reference_topk_probs_and_indices,
+    Magi2MultiHeadMoEConfig,
+    RoutingScore,
+    _reference_topk_probs_and_indices,
+    torch_mh_moe_forward,
 )
 
 try:  # Triton's precise exp; ``tl.exp`` lowers to the 29-ULP ex2 approximation.

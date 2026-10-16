@@ -284,30 +284,21 @@ class MultiModalityRMSNorm(nn.Module):
         if split and (tensor.ndim < 2 or tensor.shape[-2] * tensor.shape[-1] != self.dim or self.num_patterns != 1):
             raise ValueError(f"cannot normalize a {tuple(tensor.shape)} tensor over {self.dim} features")
         feature_shape = tuple(tensor.shape[-2:]) if split else (self.num_patterns, self.dim)
+        normalized = tensor.float()
         reduce_dims = (-2, -1) if split else -1
+        normalized = normalized * torch.rsqrt(normalized.square().mean(dim=reduce_dims, keepdim=True) + self.eps)
         if self.num_modality == 1:
             weight = self.weight.view(feature_shape) + 1.0
-            result = self._normalize(tensor, weight, reduce_dims)
+            result = normalized * weight
         else:
             if modality_dispatcher is None:
                 raise ValueError("modality_dispatcher is required for multimodal RMSNorm")
-            inputs = modality_dispatcher.dispatch(tensor)
+            inputs = modality_dispatcher.dispatch(normalized)
             weights = self.weight.view(self.num_modality, *feature_shape)
             result = modality_dispatcher.undispatch(
-                *(self._normalize(part, weights[index] + 1.0, reduce_dims) for index, part in enumerate(inputs))
+                *(part * (weights[index] + 1.0) for index, part in enumerate(inputs))
             )
         return result.to(self.out_dtype or original_dtype)
-
-    def _normalize(
-        self,
-        tensor: torch.Tensor,
-        weight: torch.Tensor,
-        reduce_dims: int | tuple[int, ...],
-    ) -> torch.Tensor:
-        """Apply the portable expression before the caller casts the output."""
-        normalized = tensor.float()
-        normalized = normalized * torch.rsqrt(normalized.square().mean(dim=reduce_dims, keepdim=True) + self.eps)
-        return normalized * weight
 
 
 def _frequency_bands(

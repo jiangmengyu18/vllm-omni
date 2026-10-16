@@ -15,6 +15,17 @@ logger = init_logger(__name__)
 _HAS_MINDIESD = find_spec("mindiesd") is not None
 
 
+def rms_norm_npu(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Apply the shared NPU RMSNorm primitive with an explicit gamma tensor."""
+    import torch_npu
+
+    return torch_npu.npu_rms_norm(x, gamma=weight, epsilon=eps)[0]
+
+
 class LayerNorm(nn.LayerNorm, CustomOp):
     """
     LayerNorm implementation that inherits from both ``nn.LayerNorm`` and ``CustomOp``.
@@ -133,9 +144,7 @@ class RMSNorm(CustomOp):
             )
             return output, updated_residual
 
-        output = torch_npu.npu_rms_norm(x, gamma=self.weight, epsilon=self.variance_epsilon)[0]
-
-        return output
+        return rms_norm_npu(x, self.weight, self.variance_epsilon)
 
     def forward_native(
         self,

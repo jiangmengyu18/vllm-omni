@@ -29,6 +29,36 @@ def swiglu7_pair(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return (gate * torch.sigmoid(1.702 * gate) * (up + 1.0)).to(dtype)
 
 
+def _reference_topk_probs_and_indices(
+    router_logits: torch.Tensor,
+    top_k: int,
+    *,
+    score_func: RoutingScore = "sigmoid",
+    expert_bias: torch.Tensor | None = None,
+    route_norm: bool = True,
+    norm_eps: float = 1e-12,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Unfused reference routing.  Also the oracle the fused path is tested against."""
+
+    if score_func == "sigmoid":
+        router_scores = torch.sigmoid(router_logits)
+    elif score_func == "softmax":
+        router_scores = torch.softmax(router_logits, dim=-1)
+    else:
+        raise ValueError(f"unsupported routing score function {score_func!r}")
+    selection_scores = router_scores
+    if expert_bias is not None:
+        selection_scores = selection_scores + expert_bias.view(router_logits.shape[0], 1, -1)
+    # Keep the reference's default sorted=True behavior.  Besides defining the
+    # route order for ties, this also fixes the reduction order used by the
+    # following L1 normalization.
+    topk_indices = torch.topk(selection_scores, top_k, dim=-1).indices
+    topk_probs = router_scores.gather(-1, topk_indices)
+    if route_norm:
+        topk_probs = F.normalize(topk_probs, p=1, dim=-1, eps=norm_eps)
+    return topk_probs, topk_indices
+
+
 def compute_topk_probs_and_indices(
     router_logits: torch.Tensor,
     top_k: int,
@@ -48,23 +78,14 @@ def compute_topk_probs_and_indices(
         raise ValueError("router_logits must be [heads,tokens,experts]")
     if not 0 < top_k <= router_logits.shape[-1]:
         raise ValueError("top_k must be in [1, num_experts]")
-    if score_func == "sigmoid":
-        router_scores = torch.sigmoid(router_logits)
-    elif score_func == "softmax":
-        router_scores = torch.softmax(router_logits, dim=-1)
-    else:
-        raise ValueError(f"unsupported routing score function {score_func!r}")
-    selection_scores = router_scores
-    if expert_bias is not None:
-        selection_scores = selection_scores + expert_bias.view(router_logits.shape[0], 1, -1)
-    # Keep the reference's default sorted=True behavior.  Besides defining the
-    # route order for ties, this also fixes the reduction order used by the
-    # following L1 normalization.
-    topk_indices = torch.topk(selection_scores, top_k, dim=-1).indices
-    topk_probs = router_scores.gather(-1, topk_indices)
-    if route_norm:
-        topk_probs = F.normalize(topk_probs, p=1, dim=-1, eps=norm_eps)
-    return topk_probs, topk_indices
+    return _reference_topk_probs_and_indices(
+        router_logits,
+        top_k,
+        score_func=score_func,
+        expert_bias=expert_bias,
+        route_norm=route_norm,
+        norm_eps=norm_eps,
+    )
 
 
 def global_sort_routes(

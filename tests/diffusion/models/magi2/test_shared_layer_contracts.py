@@ -10,9 +10,12 @@ import pytest
 import torch
 
 from tests.helpers.mark import hardware_test
+from vllm_omni.diffusion.layers import norm as shared_norm
+from vllm_omni.diffusion.layers import rope as shared_rope
 from vllm_omni.diffusion.models.magi2.common_layers import MultiModalityRMSNorm
 from vllm_omni.diffusion.models.magi2.layers.native import ModalityDispatcher
 from vllm_omni.diffusion.models.magi2.layers.native.rope import apply_rotary_emb
+from vllm_omni.diffusion.models.magi2.layers.npu import normalization as npu_norm
 from vllm_omni.diffusion.models.magi2.layers.npu import rope as npu_rope
 from vllm_omni.diffusion.models.magi2.layers.npu.normalization import MultiModalityRMSNorm as NPUMultiModalityRMSNorm
 
@@ -103,16 +106,19 @@ def test_native_norm_scales_in_fp32_before_output_cast() -> None:
 
 @pytest.mark.cpu
 def test_multimodality_norm_state_dict_keeps_flat_fp32_zero_delta() -> None:
-    norm = MultiModalityRMSNorm(8, num_modality=3, num_patterns=2)
-    state = norm.state_dict()
-    assert set(state) == {"weight"}
-    assert state["weight"].shape == (48,)
-    assert state["weight"].dtype == torch.float32
-    assert torch.count_nonzero(state["weight"]) == 0
+    for norm_type in (MultiModalityRMSNorm, NPUMultiModalityRMSNorm):
+        norm = norm_type(8, num_modality=3, num_patterns=2)
+        state = norm.state_dict()
+        assert set(state) == {"weight"}
+        assert state["weight"].shape == (48,)
+        assert state["weight"].dtype == torch.float32
+        assert torch.count_nonzero(state["weight"]) == 0
 
 
 @pytest.mark.cpu
-def test_multimodality_norm_keeps_token_order_and_empty_groups() -> None:
+def test_multimodality_norm_keeps_token_order_and_empty_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     generator = torch.Generator().manual_seed(17)
     norm = MultiModalityRMSNorm(4, num_modality=3, out_dtype=torch.float32)
     delta = torch.randn(3, 4, generator=generator) * 0.1
@@ -121,7 +127,20 @@ def test_multimodality_norm_keeps_token_order_and_empty_groups() -> None:
     x = torch.randn(5, 4, generator=generator).to(torch.bfloat16)
     mapping = torch.tensor([2, 0, 2, 0, 2], dtype=torch.int32)
     dispatcher = ModalityDispatcher(mapping, 3)
-    actual = dispatcher.inverse_permute(norm(dispatcher.permute(x), dispatcher))
+    packed = dispatcher.permute(x)
+    dispatch = dispatcher.dispatch
+    dispatched: list[torch.Tensor] = []
+
+    def record_dispatch(tensor: torch.Tensor) -> list[torch.Tensor]:
+        dispatched.append(tensor)
+        return dispatch(tensor)
+
+    monkeypatch.setattr(dispatcher, "dispatch", record_dispatch)
+    actual = dispatcher.inverse_permute(norm(packed, dispatcher))
+    # Keep the original common-layer order: normalize the complete tensor in
+    # FP32 first, then group it by modality and apply the modality scales.
+    assert len(dispatched) == 1 and dispatched[0].dtype == torch.float32
+    torch.testing.assert_close(dispatched[0], _rms_reference(packed, torch.ones(4), norm.eps), rtol=0, atol=0)
     expected = _rms_reference(x, delta[mapping.long()] + 1.0, norm.eps)
     assert actual.dtype == torch.float32
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
@@ -185,7 +204,7 @@ def test_npu_rope_falls_back_for_cpu_tensor() -> None:
 
 
 @hardware_test(res={"npu": "A5"}, num_cards=1)
-def test_rms_norm_npu_matches_fp32_reference() -> None:
+def test_rms_norm_npu_matches_fp32_reference(monkeypatch: pytest.MonkeyPatch) -> None:
     device = _require_npu()
     generator = torch.Generator().manual_seed(20)
     x_cpu = torch.randn(17, 64, generator=generator)
@@ -193,7 +212,20 @@ def test_rms_norm_npu_matches_fp32_reference() -> None:
     norm = NPUMultiModalityRMSNorm(64, out_dtype=torch.float32).to(device)
     with torch.no_grad():
         norm.weight.copy_((gamma - 1.0).to(device))
+    shared_op = npu_norm.rms_norm_npu
+    assert shared_op is shared_norm.rms_norm_npu
+    calls: list[bool] = []
+
+    def checked_shared_rms(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+        assert x.shape == (17, 64) and weight.shape == (64,)
+        assert x.dtype == weight.dtype == torch.float32
+        assert eps == norm.eps
+        calls.append(True)
+        return shared_op(x, weight, eps)
+
+    monkeypatch.setattr(npu_norm, "rms_norm_npu", checked_shared_rms)
     actual = norm(x_cpu.to(device))
+    assert calls == [True]
     assert actual.device.type == "npu"
     assert actual.dtype == torch.float32
     assert actual.shape == x_cpu.shape
@@ -201,27 +233,34 @@ def test_rms_norm_npu_matches_fp32_reference() -> None:
 
 
 @hardware_test(res={"npu": "A5"}, num_cards=1)
-def test_npu_rope_keeps_batch_cos_dtype_and_partial_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_npu_rope_reuses_shared_mindie_and_keeps_partial_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     device = _require_npu()
+    pytest.importorskip("mindiesd")
     generator = torch.Generator().manual_seed(21)
     x_cpu = torch.randn(2, 5, 4, 128, generator=generator).to(torch.bfloat16)
-    phase = torch.randn(2, 5, 48, generator=generator)
+    phase = torch.randn(5, 48, generator=generator)
     cos_cpu, sin_cpu = phase.cos(), phase.sin()
     x = x_cpu.to(device)
-    torch_npu = importlib.import_module("torch_npu")
-    real_op = torch_npu.npu_rotary_mul
-    calls = []
+    shared_op = npu_rope.apply_rotary_emb_mindiesd
+    assert shared_op is shared_rope.apply_rotary_emb_mindiesd
+    calls: list[bool] = []
 
-    def checked_rotary_mul(prefix, op_cos, op_sin, *, rotary_mode):
+    def checked_shared_rotary(
+        prefix: torch.Tensor,
+        op_cos: torch.Tensor,
+        op_sin: torch.Tensor,
+        interleaved: bool = False,
+        half_head_dim: bool = True,
+    ) -> torch.Tensor:
         assert prefix.shape == (2, 5, 4, 96)
-        assert op_cos.shape == op_sin.shape == (2, 5, 1, 96)
+        assert op_cos.shape == op_sin.shape == (5, 48)
         assert prefix.is_contiguous() and op_cos.is_contiguous() and op_sin.is_contiguous()
         assert prefix.dtype == op_cos.dtype == op_sin.dtype == x.dtype
-        assert rotary_mode == "half"
+        assert not interleaved and half_head_dim
         calls.append(True)
-        return real_op(prefix, op_cos, op_sin, rotary_mode=rotary_mode)
+        return shared_op(prefix, op_cos, op_sin, interleaved=interleaved, half_head_dim=half_head_dim)
 
-    monkeypatch.setattr(torch_npu, "npu_rotary_mul", checked_rotary_mul)
+    monkeypatch.setattr(npu_rope, "apply_rotary_emb_mindiesd", checked_shared_rotary)
     actual = npu_rope.apply_rotary_emb(x, cos_cpu.to(device), sin_cpu.to(device))
     assert calls == [True]
     assert actual.device.type == "npu"
@@ -237,16 +276,24 @@ def test_npu_rope_keeps_batch_cos_dtype_and_partial_tail(monkeypatch: pytest.Mon
 
 @hardware_test(res={"npu": "A5"}, num_cards=1)
 @pytest.mark.parametrize(
-    ("shape", "interleaved"),
-    [((5, 4, 128), False), ((1, 5, 4, 128), True)],
-    ids=["rank-three", "interleaved"],
+    ("shape", "interleaved", "batch_dependent"),
+    [((5, 4, 128), False, False), ((1, 5, 4, 128), True, False), ((2, 5, 4, 128), False, True)],
+    ids=["rank-three", "interleaved", "batch-dependent-cos"],
 )
-def test_npu_rope_unsupported_layouts_keep_native_semantics(shape: tuple[int, ...], interleaved: bool) -> None:
+def test_npu_rope_unsupported_layouts_keep_native_semantics(
+    monkeypatch: pytest.MonkeyPatch, shape: tuple[int, ...], interleaved: bool, batch_dependent: bool
+) -> None:
     device = _require_npu()
     generator = torch.Generator().manual_seed(22)
     x = torch.randn(*shape, generator=generator).to(torch.bfloat16).to(device)
-    phase = torch.randn(shape[-3], 48, generator=generator).to(device)
+    phase_shape = (shape[0], shape[-3], 48) if batch_dependent else (shape[-3], 48)
+    phase = torch.randn(*phase_shape, generator=generator).to(device)
     cos, sin = phase.cos(), phase.sin()
+
+    def forbidden_shared_rotary(*args, **kwargs):
+        pytest.fail("unsupported MAGI-2 layouts must retain the native path")
+
+    monkeypatch.setattr(npu_rope, "apply_rotary_emb_mindiesd", forbidden_shared_rotary)
     actual = npu_rope.apply_rotary_emb(x, cos, sin, interleaved=interleaved)
     expected = apply_rotary_emb(x, cos, sin, interleaved=interleaved)
     assert actual.shape == expected.shape
