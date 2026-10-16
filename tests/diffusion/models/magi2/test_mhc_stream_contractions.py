@@ -245,7 +245,7 @@ def _norm(group_sizes, hidden=HIDDEN, seed=8, device="cpu"):
     if len(group_sizes) == 1:
         return norm
     modalities = torch.cat([torch.full((size,), index, dtype=torch.int32) for index, size in enumerate(group_sizes)])
-    dispatcher = layers.ModalityDispatcher(modalities.to(device), len(group_sizes))
+    dispatcher = mhc_module.ModalityDispatcher(modalities.to(device), len(group_sizes))
     return lambda tensor: norm(tensor, dispatcher)
 
 

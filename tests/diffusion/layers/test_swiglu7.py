@@ -8,7 +8,6 @@ from tests.helpers.mark import hardware_marks
 from vllm_omni.diffusion.layers import swiglu7 as kernel_module
 from vllm_omni.diffusion.layers.swiglu7 import SwiGLU7
 from vllm_omni.diffusion.models.magi2 import common_layers
-from vllm_omni.diffusion.models.magi2 import layers as magi2_layers
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.core_model]
 
@@ -88,7 +87,7 @@ def test_model_wiring_uses_fused_eager_path(monkeypatch):
             return reference(x, alpha, limit, out_dtype)
 
     monkeypatch.setattr(common_layers, "_swiglu7_op", Probe())
-    torch.testing.assert_close(magi2_layers.swiglu7(x), reference(x))
+    torch.testing.assert_close(common_layers.swiglu7(x), reference(x))
     assert calls == ["dispatch"]
 
 
@@ -101,7 +100,7 @@ def test_compile_keeps_native_pointwise_graph(monkeypatch):
         targets.extend(str(node.target) for node in gm.graph.nodes)
         return gm.forward
 
-    compiled = torch.compile(magi2_layers.swiglu7, backend=backend, fullgraph=True)
+    compiled = torch.compile(common_layers.swiglu7, backend=backend, fullgraph=True)
     x = torch.randn(3, 12)
     torch.testing.assert_close(compiled(x), reference(x), rtol=0, atol=0)
     assert any("sigmoid" in target for target in targets)

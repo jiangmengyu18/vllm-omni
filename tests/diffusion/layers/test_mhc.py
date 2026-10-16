@@ -9,6 +9,7 @@ import torch
 from tests.helpers.mark import hardware_marks
 from vllm_omni.diffusion.layers import mhc
 from vllm_omni.diffusion.models.magi2 import layers as model_layers
+from vllm_omni.diffusion.models.magi2.common_layers import sinkhorn_knopp
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.core_model]
 
@@ -115,7 +116,7 @@ def test_meta_shapes_and_empty():
 
 @pytest.mark.cpu
 def test_sinkhorn_alias_and_rectangular_native_contract():
-    assert model_layers.sinkhorn_knopp is mhc.sinkhorn_knopp
+    assert sinkhorn_knopp is mhc.sinkhorn_knopp
     logits = torch.randn(2, 3, 4)
     expected = torch.exp(logits - logits.amax((-2, -1), keepdim=True))
     torch.testing.assert_close(mhc.sinkhorn_knopp(logits, 0, 1e-12), expected, rtol=0, atol=0)
